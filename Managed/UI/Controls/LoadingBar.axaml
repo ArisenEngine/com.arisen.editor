@@ -1,0 +1,18 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="20"
+             x:Class="ArisenEditorFramework.UI.Controls.LoadingBar">
+    <Grid>
+        <Border Background="#282e39" Height="8" CornerRadius="4">
+            <Border Name="ProgressBar" Background="#135bec" Height="8" CornerRadius="4" HorizontalAlignment="Left" Width="0">
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Width" Duration="0:0:0.2" Easing="CubicEaseOut" />
+                    </Transitions>
+                </Border.Transitions>
+            </Border>
+        </Border>
+    </Grid>
+</UserControl>

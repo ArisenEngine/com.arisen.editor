@@ -1,0 +1,61 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:ArisenEditorFramework.Assets"
+             x:Class="ArisenEditorFramework.Assets.AssetBrowserControl"
+             x:DataType="local:AssetBrowserViewModel">
+
+  <UserControl.Resources>
+    <local:FolderOrFileIconConverter x:Key="FolderOrFileIconConverter" />
+  </UserControl.Resources>
+
+  <Grid RowDefinitions="Auto, *">
+    
+    <!-- Toolbar -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto, *, Auto" Margin="4">
+      <StackPanel Orientation="Horizontal" Spacing="4">
+        <Button Command="{Binding NavigateBackCommand}" ToolTip.Tip="Go Back">
+          <TextBlock Text="&lt;" Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Button>
+      </StackPanel>
+      
+      <!-- Breadcrumbs Simplified -->
+      <ItemsControl Grid.Column="1" ItemsSource="{Binding Breadcrumbs}" Margin="8,0">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="2"/>
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Orientation="Horizontal" Spacing="2">
+              <TextBlock Text="{Binding}" VerticalAlignment="Center" />
+              <TextBlock Text="/" VerticalAlignment="Center" Opacity="0.5" />
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <TextBox Grid.Column="2" Width="200" Watermark="Search Assets..." Text="{Binding SearchQuery}"/>
+    </Grid>
+
+    <!-- Main View -->
+    <ListBox Grid.Row="1" 
+             ItemsSource="{Binding Items}" 
+             SelectedItem="{Binding SelectedItem}"
+             Background="Transparent">
+      
+      <ListBox.ItemsPanel>
+        <ItemsPanelTemplate>
+          <WrapPanel Orientation="Horizontal" />
+        </ItemsPanelTemplate>
+      </ListBox.ItemsPanel>
+      
+      <ListBox.ItemTemplate>
+        <DataTemplate>
+          <local:AssetItemView DoubleTapped="OnItemDoubleTapped" PointerPressed="OnItemPointerPressed" />
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+      
+    </ListBox>
+  </Grid>
+</UserControl>

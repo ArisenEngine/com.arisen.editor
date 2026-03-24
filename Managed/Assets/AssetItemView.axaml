@@ -1,0 +1,28 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:ArisenEditorFramework.Assets"
+             x:Class="ArisenEditorFramework.Assets.AssetItemView"
+             x:DataType="local:AssetItemViewModel">
+  
+  <UserControl.Resources>
+    <local:FolderOrFileIconConverter x:Key="FolderOrFileIconConverter" />
+  </UserControl.Resources>
+
+  <StackPanel Background="Transparent" Width="80" Margin="4" Spacing="4">
+    <Panel Width="64" Height="64">
+      <!-- Default folder/file icon if no thumbnail -->
+      <Viewbox IsVisible="{Binding Icon, Converter={x:Static ObjectConverters.IsNull}}">
+        <TextBlock Text="{Binding IsDirectory, Converter={StaticResource FolderOrFileIconConverter}}" FontSize="32" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Viewbox>
+      <Image Source="{Binding Icon}" IsVisible="{Binding Icon, Converter={x:Static ObjectConverters.IsNotNull}}" Stretch="Uniform" />
+    </Panel>
+    
+    <TextBlock Text="{Binding Name}" 
+               TextAlignment="Center" 
+               FontSize="11"
+               TextWrapping="Wrap"
+               MaxLines="2"
+               TextTrimming="CharacterEllipsis"/>
+  </StackPanel>
+  
+</UserControl>

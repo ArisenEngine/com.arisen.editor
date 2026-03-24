@@ -1,0 +1,54 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Dark">
+                    <!-- Base Colors from Design -->
+                    <Color x:Key="ArisenPrimary">#135bec</Color>
+                    <Color x:Key="ArisenBackgroundDark">#101622</Color>
+                    <Color x:Key="ArisenBackgroundLight">#f6f6f8</Color>
+                    <Color x:Key="ArisenPanelDark">#181e2a</Color>
+                    <Color x:Key="ArisenBorderDark">#282e39</Color>
+                    <Color x:Key="ArisenSurfaceDark">#0a0f18</Color>
+                    <Color x:Key="ArisenViewportBackground">#0a0f18</Color>
+
+                    <!-- Brushes -->
+                    <SolidColorBrush x:Key="ArisenPrimaryBrush" Color="{StaticResource ArisenPrimary}" />
+                    <SolidColorBrush x:Key="ArisenBackgroundDarkBrush" Color="{StaticResource ArisenBackgroundDark}" />
+                    <SolidColorBrush x:Key="ArisenBackgroundLightBrush" Color="{StaticResource ArisenBackgroundLight}" />
+                    <SolidColorBrush x:Key="ArisenPanelDarkBrush" Color="{StaticResource ArisenPanelDark}" />
+                    <SolidColorBrush x:Key="ArisenBorderDarkBrush" Color="{StaticResource ArisenBorderDark}" />
+                    <SolidColorBrush x:Key="ArisenSurfaceDarkBrush" Color="{StaticResource ArisenSurfaceDark}" />
+                    <SolidColorBrush x:Key="ArisenViewportBackgroundBrush" Color="{StaticResource ArisenViewportBackground}" />
+
+                    <!-- Fluent Theme Overrides -->
+                    <Color x:Key="SystemAccentColor">#135bec</Color>
+                    <Color x:Key="SystemRegionColor">#101622</Color>
+                    <SolidColorBrush x:Key="SystemControlBackgroundAltHighBrush" Color="{StaticResource ArisenPanelDark}" />
+                    <SolidColorBrush x:Key="SystemListLowColor" Color="{StaticResource ArisenBorderDark}" />
+                    
+                    <!-- Custom Arisen Keys for consistency -->
+                    <StaticResource x:Key="EditorBackgroundBrush" ResourceKey="ArisenBackgroundDarkBrush" />
+                    <StaticResource x:Key="EditorPanelBackgroundBrush" ResourceKey="ArisenPanelDarkBrush" />
+                    <StaticResource x:Key="EditorBorderBrush" ResourceKey="ArisenBorderDarkBrush" />
+                    <StaticResource x:Key="EditorViewportBackgroundBrush" ResourceKey="ArisenSurfaceDarkBrush" />
+                    <StaticResource x:Key="EditorAccentBrush" ResourceKey="ArisenPrimaryBrush" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Styles.Resources>
+
+    <!-- Global Styles for consistency -->
+    <Style Selector="Window">
+        <Setter Property="Background" Value="{DynamicResource ArisenBackgroundDarkBrush}"/>
+    </Style>
+    
+    <!-- Hierarchy and Inspector background consistency -->
+    <Style Selector="Border.ArisenPanel">
+        <Setter Property="Background" Value="{DynamicResource ArisenPanelDarkBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ArisenBorderDarkBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+
+</Styles>
