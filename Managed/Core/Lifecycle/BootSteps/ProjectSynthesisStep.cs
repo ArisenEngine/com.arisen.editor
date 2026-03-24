@@ -68,7 +68,7 @@ public class ProjectSynthesisStep : IBootStep
             
             string defaultScenePath = Path.Combine(scenesDir, "SampleScene.arisen");
             
-            ArisenEngine.Core.Serialization.SceneSerializer.SaveScene(defaultScenePath, newScene.Registry);
+            ArisenEngine.Resources.Serialization.SceneSerializer.SaveScene(defaultScenePath, newScene.Registry);
             
             // For a brand new project, auto-load the sample scene
             SceneManagerService.Instance.LoadScene(defaultScenePath);
