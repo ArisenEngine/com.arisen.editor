@@ -1,0 +1,44 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:local="clr-namespace:ArisenEditorFramework.Hierarchy"
+             xmlns:ui="clr-namespace:ArisenEditorFramework.UI.Controls"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="ArisenEditorFramework.Hierarchy.HierarchyControl"
+             x:DataType="local:HierarchyViewModel">
+
+  <UserControl.Resources>
+    <!-- We need a Drag/Drop format handler if we do complex dragging -->
+  </UserControl.Resources>
+
+  <Grid RowDefinitions="Auto,*">
+    
+    <!-- Optional Toolbar for Add/Delete -->
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="4" Margin="4">
+      <Button Command="{Binding AddRootItemCommand}" ToolTip.Tip="Add Root Item">
+        <TextBlock Text="+" FontSize="14" Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Button>
+      <Button Command="{Binding AddChildItemCommand}" ToolTip.Tip="Add Child Item">
+        <TextBlock Text="+c" FontSize="10" Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Button>
+      <Button Command="{Binding DeleteSelectedItemCommand}" ToolTip.Tip="Delete Item">
+        <TextBlock Text="x" FontSize="14" Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Button>
+    </StackPanel>
+
+    <!-- The Tree View -->
+    <ui:ArisenTreeView Grid.Row="1" 
+                       ItemsSource="{Binding Items}" 
+                       SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+                       x:Name="MainTreeView">
+        <ui:ArisenTreeView.ContextMenu>
+            <ContextMenu>
+                <MenuItem Header="Add Child" Command="{Binding AddChildItemCommand}" />
+                <MenuItem Header="Rename (F2)" Command="{Binding RenameSelectedItemCommand}" />
+                <MenuItem Header="Delete (Del)" Command="{Binding DeleteSelectedItemCommand}" />
+            </ContextMenu>
+        </ui:ArisenTreeView.ContextMenu>
+    </ui:ArisenTreeView>
+  </Grid>
+</UserControl>

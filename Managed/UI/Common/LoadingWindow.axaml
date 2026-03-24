@@ -1,0 +1,23 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:ArisenEditorFramework.UI.Controls"
+        x:Class="ArisenEditorFramework.UI.Common.LoadingWindow"
+        WindowStartupLocation="CenterScreen"
+        SystemDecorations="None"
+        Width="500" Height="300"
+        Background="#101622"
+        Topmost="True"
+        PointerPressed="Window_PointerPressed">
+    <Border BorderBrush="#282e39" BorderThickness="1">
+        <Grid RowDefinitions="*, Auto">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="20">
+                <Image Source="/Resources/arisen-logo.png" Width="80" Height="80" />
+                <TextBlock Name="StageText" Text="Initializing Arisen Engine..." Foreground="White" FontSize="16" HorizontalAlignment="Center" />
+                <TextBlock Name="StatusText" Text="Loading core modules..." Foreground="#5c6b89" FontSize="12" HorizontalAlignment="Center" />
+            </StackPanel>
+            <Grid Grid.Row="1" Margin="40,0,40,40">
+                <controls:LoadingBar Name="ProgressBar" Height="4" Progress="0" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

@@ -1,0 +1,57 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:local="clr-namespace:ArisenEditorFramework.Inspector"
+             mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="800"
+             x:Class="ArisenEditorFramework.Inspector.InspectorControl"
+             x:DataType="local:InspectorViewModel">
+
+  <UserControl.Resources>
+      <local:PropertyDataTemplateSelector x:Key="PropertyTemplateSelector" />
+  </UserControl.Resources>
+
+  <ScrollViewer>
+    <ItemsControl ItemsSource="{Binding Categories}">
+      
+      <!-- Category Template -->
+      <ItemsControl.ItemTemplate>
+        <DataTemplate DataType="{x:Type local:InspectorCategoryViewModel}">
+            <Expander Header="{Binding CategoryName}" 
+                      IsExpanded="{Binding IsExpanded, Mode=TwoWay}"
+                      HorizontalAlignment="Stretch"
+                      Padding="0" Margin="0,0,0,2">
+                
+                <!-- Properties within the Category -->
+                <ItemsControl ItemsSource="{Binding Properties}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type local:PropertyItemViewModel}">
+                            
+                            <!-- A two-column Grid for Property Name and Editor Content -->
+                            <Grid ColumnDefinitions="0.4*, 0.6*" Margin="4,2">
+                                
+                                <TextBlock Grid.Column="0" 
+                                           Text="{Binding DisplayName}" 
+                                           ToolTip.Tip="{Binding Description}"
+                                           VerticalAlignment="Center" 
+                                           TextTrimming="CharacterEllipsis"/>
+                                           
+                                <ContentControl Grid.Column="1" 
+                                                Content="{Binding}" 
+                                                ContentTemplate="{StaticResource PropertyTemplateSelector}" 
+                                                Margin="4,0,0,0"
+                                                IsEnabled="{Binding !IsReadOnly}"
+                                                VerticalAlignment="Center"/>
+                                                
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Expander>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+      
+    </ItemsControl>
+  </ScrollViewer>
+  
+</UserControl>

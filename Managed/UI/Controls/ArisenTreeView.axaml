@@ -1,0 +1,64 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:hierarchy="clr-namespace:ArisenEditorFramework.Hierarchy"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="ArisenEditorFramework.UI.Controls.ArisenTreeView"
+             x:Name="RootControl">
+
+    <TreeView ItemsSource="{Binding ItemsSource, ElementName=RootControl}" 
+              SelectedItem="{Binding SelectedItem, ElementName=RootControl, Mode=TwoWay}"
+              SelectionMode="Single"
+              DragDrop.AllowDrop="True"
+              x:Name="MainTreeView">
+              
+      <TreeView.KeyBindings>
+          <KeyBinding Gesture="F2" Command="{Binding ElementName=RootControl, Path=SelectedItem.BeginRenameCommand}" />
+          <!-- Optional: route delete through the control or item -->
+          <KeyBinding Gesture="Delete" Command="{Binding ElementName=RootControl, Path=SelectedItem.DeleteCommand}" />
+      </TreeView.KeyBindings>
+
+      <TreeView.ItemTemplate>
+        <TreeDataTemplate DataType="{x:Type hierarchy:IHierarchyItem}" ItemsSource="{Binding Children}">
+          <!-- Context menu for operations -->
+          <StackPanel Orientation="Horizontal" Background="Transparent" 
+                      Margin="2,0" 
+                      Spacing="4"
+                      ToolTip.Tip="{Binding Name}"
+                      PointerPressed="OnItemPointerPressed"
+                      PointerMoved="OnItemPointerMoved"
+                      PointerReleased="OnItemPointerReleased"
+                      DoubleTapped="OnItemDoubleTapped">
+
+            <!-- Icon -->
+            <Image Source="{Binding Icon}" Width="16" Height="16" IsVisible="{Binding Icon, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+            
+            <!-- Standard Text Display -->
+            <TextBlock Text="{Binding Name}" 
+                       VerticalAlignment="Center" 
+                       IsVisible="{Binding !IsEditing}" />
+
+            <!-- Editing Text Display -->
+            <TextBox Text="{Binding Name}" 
+                     IsVisible="{Binding IsEditing}" 
+                     VerticalAlignment="Center"
+                     KeyDown="OnTextBoxKeyDown"
+                     LostFocus="OnTextBoxLostFocus"
+                     x:Name="EditTextBox"/>
+          </StackPanel>
+        </TreeDataTemplate>
+      </TreeView.ItemTemplate>
+        
+      <!-- Style the TreeViewItem to bind IsExpanded -->
+      <TreeView.Styles>
+        <Style Selector="TreeViewItem" x:DataType="hierarchy:IHierarchyItem">
+            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+        </Style>
+        <!-- Always show expander for branch nodes even if empty -->
+        <Style Selector="TreeViewItem:empty /template/ ToggleButton#PART_ExpandCollapseChevron" x:DataType="hierarchy:IHierarchyItem">
+            <Setter Property="IsVisible" Value="{Binding !IsLeaf}" />
+        </Style>
+      </TreeView.Styles>
+    </TreeView>
+</UserControl>

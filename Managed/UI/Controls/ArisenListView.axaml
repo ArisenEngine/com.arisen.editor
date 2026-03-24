@@ -1,0 +1,114 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:hierarchy="clr-namespace:ArisenEditorFramework.Hierarchy"
+             mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+             x:Class="ArisenEditorFramework.UI.Controls.ArisenListView"
+             x:Name="RootControl">
+
+    <UserControl.Resources>
+      <!-- Icon Mode Template -->
+      <DataTemplate x:Key="IconModeTemplate" DataType="hierarchy:IHierarchyItem">
+          <StackPanel Orientation="Vertical" 
+                      Background="Transparent" 
+                      Margin="4" 
+                      Spacing="4"
+                      Width="{Binding ElementName=RootControl, Path=ItemWidth}"
+                      ToolTip.Tip="{Binding Name}"
+                      PointerPressed="OnItemPointerPressed"
+                      PointerMoved="OnItemPointerMoved"
+                      PointerReleased="OnItemPointerReleased"
+                      DoubleTapped="OnItemDoubleTapped">
+            
+            <Image Source="{Binding Icon}" 
+                   Width="{Binding ElementName=RootControl, Path=IconSize}" 
+                   Height="{Binding ElementName=RootControl, Path=IconSize}" 
+                   HorizontalAlignment="Center"
+                   IsVisible="{Binding Icon, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+            
+            <TextBlock Text="{Binding Name}" 
+                       HorizontalAlignment="Center" 
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"
+                       IsVisible="{Binding !IsEditing}" />
+
+            <TextBox Text="{Binding Name}" 
+                     IsVisible="{Binding IsEditing}" 
+                     HorizontalAlignment="Center"
+                     KeyDown="OnTextBoxKeyDown"
+                     LostFocus="OnTextBoxLostFocus"/>
+          </StackPanel>
+      </DataTemplate>
+
+      <!-- List Mode Template -->
+      <DataTemplate x:Key="ListModeTemplate" DataType="hierarchy:IHierarchyItem">
+          <Grid Background="Transparent" 
+                Margin="2,0" 
+                ColumnDefinitions="*, 100, 150"
+                ToolTip.Tip="{Binding Name}"
+                PointerPressed="OnItemPointerPressed"
+                PointerMoved="OnItemPointerMoved"
+                PointerReleased="OnItemPointerReleased"
+                DoubleTapped="OnItemDoubleTapped">
+            
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
+                <Image Source="{Binding Icon}" Width="16" Height="16" IsVisible="{Binding Icon, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                <TextBlock Text="{Binding Name}" VerticalAlignment="Center" IsVisible="{Binding !IsEditing}" />
+                <TextBox Text="{Binding Name}" IsVisible="{Binding IsEditing}" VerticalAlignment="Center" KeyDown="OnTextBoxKeyDown" LostFocus="OnTextBoxLostFocus"/>
+            </StackPanel>
+            
+            <!-- Reflection/Boxing is risky with pure IHierarchyItem but SizeString and Modified exist on TreeNodeBase -->
+            <TextBlock Grid.Column="1" Text="{ReflectionBinding SizeString, FallbackValue=''}" VerticalAlignment="Center" Foreground="#94a3b8" FontSize="11"/>
+            <TextBlock Grid.Column="2" Text="{ReflectionBinding Modified, StringFormat='{} {0:g}', FallbackValue=''}" VerticalAlignment="Center" Foreground="#94a3b8" FontSize="11"/>
+          </Grid>
+      </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid RowDefinitions="Auto,*">
+        <!-- Optional Header for List Mode -->
+        <Border Grid.Row="0" BorderBrush="#282e39" BorderThickness="0,0,0,1" Background="#181e2a" IsVisible="{Binding !IsIconMode, ElementName=RootControl}">
+            <Grid ColumnDefinitions="*, 100, 150" Margin="4,4,16,4">
+                <TextBlock Grid.Column="0" Text="Name" FontWeight="Bold" Foreground="#94a3b8" FontSize="11" Margin="22,0,0,0"/>
+                <TextBlock Grid.Column="1" Text="Size" FontWeight="Bold" Foreground="#94a3b8" FontSize="11"/>
+                <TextBlock Grid.Column="2" Text="Modified" FontWeight="Bold" Foreground="#94a3b8" FontSize="11"/>
+            </Grid>
+        </Border>
+
+        <!-- The ListBox itself -->
+        <ListBox Grid.Row="1"
+                 ItemsSource="{Binding ItemsSource, ElementName=RootControl}" 
+                 SelectedItem="{Binding SelectedItem, ElementName=RootControl, Mode=TwoWay}"
+                 SelectionMode="Multiple"
+                 DragDrop.AllowDrop="True"
+                 Background="Transparent"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 x:Name="MainListBox">
+            
+          <ListBox.KeyBindings>
+              <KeyBinding Gesture="F2" Command="{Binding ElementName=RootControl, Path=SelectedItem.BeginRenameCommand}" />
+              <KeyBinding Gesture="Delete" Command="{Binding ElementName=RootControl, Path=SelectedItem.DeleteCommand}" />
+          </ListBox.KeyBindings>
+          
+          <ListBox.Styles>
+              <!-- Dynamic Template Selection based on IsIconMode -->
+              <Style Selector="ListBox[Tag=IconMode]">
+                  <Setter Property="ItemTemplate" Value="{StaticResource IconModeTemplate}" />
+                  <Setter Property="ItemsPanel">
+                      <ItemsPanelTemplate>
+                          <WrapPanel Orientation="Horizontal" />
+                      </ItemsPanelTemplate>
+                  </Setter>
+              </Style>
+              <Style Selector="ListBox[Tag=ListMode]">
+                  <Setter Property="ItemTemplate" Value="{StaticResource ListModeTemplate}" />
+                  <Setter Property="ItemsPanel">
+                      <ItemsPanelTemplate>
+                          <VirtualizingStackPanel Orientation="Vertical" />
+                      </ItemsPanelTemplate>
+                  </Setter>
+              </Style>
+          </ListBox.Styles>
+        </ListBox>
+    </Grid>
+</UserControl>
