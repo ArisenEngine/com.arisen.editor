@@ -17,7 +17,6 @@ public class EditorPackage : IPackageEntry, IApplicationHost
 
     public void OnUnload(IServiceRegistry registry)
     {
-        registry.UnregisterService<IApplicationHost>();
     }
 
     public void Run(string[] args)
@@ -26,7 +25,6 @@ public class EditorPackage : IPackageEntry, IApplicationHost
         
         // Emulate the original Program.cs startup logic
         AppBuilder.Configure<App>()
-            .UsePlatformDetect()
             .WithInterFont()
             .LogToTrace()
             .UseReactiveUI()

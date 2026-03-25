@@ -5,9 +5,17 @@
   "version": "1.0.0",
   "description": "The official Arisen Engine Editor visual authoring environment.",
   "author": "Arisen Team",
-  "dependencies": {},
+  "dependencies": {
+      "com.arisen.core": "1.0.0",
+      "com.arisen.ecs": "1.0.0",
+      "com.arisen.dag": "1.0.0",
+      "com.arisen.resources": "1.0.0",
+      "com.arisen.rendering": "1.0.0",
+      "com.arisen.platform.desktop": "1.0.0"
+  },
   "nugetDependencies": {
     "Avalonia": "11.2.4",
+    "Avalonia.Desktop": "11.2.4",
     "Avalonia.Controls.DataGrid": "11.2.4",
     "Avalonia.ReactiveUI": "11.2.4",
     "Avalonia.Themes.Fluent": "11.2.4",
