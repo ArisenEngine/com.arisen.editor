@@ -1,10 +1,12 @@
-﻿using System;
+using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using ArisenEditor.Core.Commands;
+using ArisenEditor.Core.Services;
 using ArisenKernel.Contracts;
+using ArisenEngine.Core.Automation;
 using ArisenEditorFramework.Core;
 using ArisenEditorFramework.Services;
 using ArisenEditorFramework.UI.Menus;

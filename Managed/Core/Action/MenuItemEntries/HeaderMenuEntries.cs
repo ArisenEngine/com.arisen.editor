@@ -4,6 +4,7 @@ using ArisenEditorFramework.Attributes;
 using ArisenEditor.GameDev;
 using ArisenEditor.Utilities;
 using ArisenEngine;
+using ArisenEngine;
 using ArisenEngine.Core.Lifecycle;
 
 namespace ArisenEditor.Internal.MenuItemEntries;
@@ -17,7 +18,12 @@ internal partial class HeaderMenuEntries
     {
         Task.Run(()=> {
 
-            ArisenApplication.RequestExit();
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => {
+                if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+                {
+                    desktop.Shutdown();
+                }
+            });
             var env = EngineKernel.Instance.GetSubsystem<EnvironmentSubsystem>();
             string root = env?.ProjectRoot ?? string.Empty;
             string name = env?.ProjectName ?? string.Empty;

@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using ArisenEngine.Core.ECS;
 using ArisenEditor.Core.Services;
 using ArisenKernel.Contracts;
+using ArisenEngine.Core.Automation;
 
 namespace ArisenEditor.Core.Commands;
 

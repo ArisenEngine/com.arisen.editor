@@ -14,7 +14,7 @@
              <Application.Resources>
                  <ResourceDictionary>
                      <ResourceDictionary.MergedDictionaries>
-                         <ResourceInclude Source="avares://ArisenEditor/Themes/Icons.axaml"/>
+                         <ResourceInclude Source="avares://Com.Arisen.Editor/Themes/Icons.axaml"/>
                      </ResourceDictionary.MergedDictionaries>
                      <recycling:ControlRecycling x:Key="ControlRecyclingKey" TryToUseIdAsKey="False" />
                      <Color x:Key="RegionColor">Transparent</Color>
@@ -30,8 +30,8 @@
                 <ColorPaletteResources x:Key="Dark" Accent="#135bec" RegionColor="#101622" ErrorText="Yellow" />
             </FluentTheme.Palettes>
         </FluentTheme>
-        <StyleInclude Source="avares://ArisenEditor/Themes/Fluent.axaml"/>
-        <StyleInclude Source="avares://ArisenEditor/Themes/MainEditorStyles.axaml"/>
+        <StyleInclude Source="avares://Com.Arisen.Editor/Themes/Fluent.axaml"/>
+        <StyleInclude Source="avares://Com.Arisen.Editor/Themes/MainEditorStyles.axaml"/>
         <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml"/>
         <StyleInclude Source="avares://Dock.Avalonia/Themes/DockFluentTheme.axaml"/>
         

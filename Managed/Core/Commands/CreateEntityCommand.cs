@@ -1,6 +1,7 @@
-﻿using ArisenEngine.Core.ECS;
+using ArisenEngine.Core.ECS;
 using ArisenEditor.Core.Services;
 using ArisenKernel.Contracts;
+using ArisenEngine.Core.Automation;
 
 namespace ArisenEditor.Core.Commands;
 

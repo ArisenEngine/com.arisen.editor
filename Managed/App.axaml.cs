@@ -1,4 +1,4 @@
-﻿
+
 using System;
 using System.Diagnostics;
 using ArisenEngine.Core.Lifecycle;
@@ -16,6 +16,7 @@ using ArisenEditorFramework.Utilities;
 using ArisenEditorFramework.UI.Common;
 using ArisenEditor.ViewModels;
 using ArisenEditor.Core.Factory;
+using ArisenEngine.Core.Automation;
 using Avalonia.Controls;
 using ArisenEngine;
 using ReactiveUI;
@@ -52,7 +53,6 @@ namespace ArisenEditor
                 desktop.Exit += (sender, args) => 
                 {
                     s_EngineRunner?.Stop();
-                    ArisenEngine.Core.Lifecycle.ArisenApplication.ShutdownEngine();
                 };
 
                 // Global UI exception handler
