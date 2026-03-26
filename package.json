@@ -1,33 +1,33 @@
 {
-  "$schema": "https://arisen.dev/schemas/package-v2.json",
-  "id": "com.arisen.editor",
-  "name": "Arisen Editor",
-  "version": "1.0.0",
-  "description": "The official Arisen Engine Editor visual authoring environment.",
-  "author": "Arisen Team",
-  "dependencies": {
-      "com.arisen.core": "1.0.0",
-      "com.arisen.ecs": "1.0.0",
-      "com.arisen.dag": "1.0.0",
-      "com.arisen.resources": "1.0.0",
-      "com.arisen.rendering": "1.0.0",
-      "com.arisen.platform.desktop": "1.0.0"
-  },
-  "nugetDependencies": {
-    "Avalonia": "11.2.4",
-    "Avalonia.Desktop": "11.2.4",
-    "Avalonia.Controls.DataGrid": "11.2.4",
-    "Avalonia.ReactiveUI": "11.2.4",
-    "Avalonia.Themes.Fluent": "11.2.4",
-    "Avalonia.Fonts.Inter": "11.2.4",
-    "Avalonia.Diagnostics": "11.2.4",
-    "Avalonia.Controls.ColorPicker": "11.2.4",
-    "MessageBox.Avalonia": "3.2.0",
-    "Microsoft.Data.Sqlite": "10.0.5",
-    "YamlDotNet": "16.3.0",
-    "Dock.Avalonia": "11.2.0",
-    "Dock.Model.Mvvm": "11.2.0",
-    "Dock.Model.ReactiveUI": "11.2.0",
-    "Dock.Serializer": "11.2.0"
-  }
+    "id":  "com.arisen.editor",
+    "version":  "1.0.0",
+    "description":  "The official Arisen Engine Editor visual authoring environment.",
+    "author":  "Arisen Team",
+    "name":  "Arisen Editor",
+    "$schema":  "https://arisen.dev/schemas/package-v2.json",
+    "dependencies":  {
+                         "com.arisen.core":  "1.0.0",
+                         "com.arisen.ecs":  "1.0.0",
+                         "com.arisen.dag":  "1.0.0",
+                         "com.arisen.resources":  "1.0.0",
+                         "com.arisen.rendering":  "1.0.0",
+                         "com.arisen.platform.desktop":  "1.0.0"
+                     },
+    "nugetDependencies":  {
+                              "Avalonia":  "11.2.4",
+                              "Avalonia.Desktop":  "11.2.4",
+                              "Avalonia.Controls.DataGrid":  "11.2.4",
+                              "Avalonia.ReactiveUI":  "11.2.4",
+                              "Avalonia.Themes.Fluent":  "11.2.4",
+                              "Avalonia.Fonts.Inter":  "11.2.4",
+                              "Avalonia.Diagnostics":  "11.2.4",
+                              "Avalonia.Controls.ColorPicker":  "11.2.4",
+                              "MessageBox.Avalonia":  "3.2.0",
+                              "Microsoft.Data.Sqlite":  "10.0.5",
+                              "YamlDotNet":  "16.3.0",
+                              "Dock.Avalonia":  "11.2.0",
+                              "Dock.Model.Mvvm":  "11.2.0",
+                              "Dock.Model.ReactiveUI":  "11.2.0",
+                              "Dock.Serializer":  "11.2.0"
+                          }
 }
