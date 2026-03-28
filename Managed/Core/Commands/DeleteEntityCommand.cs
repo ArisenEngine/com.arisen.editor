@@ -34,8 +34,10 @@ public class DeleteEntityCommand : ICommand
 
         // Save all component data before deletion
         m_SavedComponents = new List<(Type, object)>();
-        foreach (var (type, pool) in scene.Registry.GetEntityComponents(m_Entity))
+        foreach (var pool in scene.Registry.GetEntityComponentPools(m_Entity))
         {
+            var type = pool.GetComponentType();
+            
             // Do not save Intrusive Linked List structs, we manage those via ReparentEntity natively!
             if (type == typeof(ParentComponent) || type == typeof(SiblingComponent) || type == typeof(ChildComponent))
                 continue;

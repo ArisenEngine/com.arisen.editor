@@ -3,6 +3,8 @@ using System.Windows.Input;
 using ReactiveUI;
 using System;
 using System.Linq;
+using ArisenEngine.Core.ECS;
+using ArisenKernel.Services;
 
 namespace ArisenEditorFramework.Hierarchy;
 
@@ -12,6 +14,7 @@ namespace ArisenEditorFramework.Hierarchy;
 /// </summary>
 public class HierarchyViewModel : ReactiveObject
 {
+    private readonly IEntityManager _entityManager;
     private IHierarchyItem? _selectedItem;
 
     public ObservableCollection<IHierarchyItem> Items { get; } = new();
@@ -45,38 +48,51 @@ public class HierarchyViewModel : ReactiveObject
     public ICommand DeleteSelectedItemCommand { get; }
     public ICommand RenameSelectedItemCommand { get; }
 
-    public HierarchyViewModel()
+    public HierarchyViewModel(IEntityManager entityManager)
     {
+        _entityManager = entityManager;
+
+        // Initialize from existing entities
+        foreach (var entity in _entityManager.GetAllEntities())
+        {
+            Items.Add(CreateHierarchyItem(entity));
+        }
+
         AddRootItemCommand = ReactiveCommand.Create(() => {
-            var newItem = CreateNewItem("New Item");
+            var entity = _entityManager.CreateEntity();
+            var newItem = CreateHierarchyItem(entity);
             Items.Add(newItem);
         });
 
         AddChildItemCommand = ReactiveCommand.Create(() => {
             if (SelectedItem != null && !SelectedItem.IsLeaf)
             {
-                var newItem = CreateNewItem("New Child Item");
+                var entity = _entityManager.CreateEntity();
+                var newItem = CreateHierarchyItem(entity);
                 newItem.Parent = SelectedItem;
                 SelectedItem.Children.Add(newItem);
                 SelectedItem.IsExpanded = true;
             }
             else if (SelectedItem == null)
             {
-                var newItem = CreateNewItem("New Item");
+                var entity = _entityManager.CreateEntity();
+                var newItem = CreateHierarchyItem(entity);
                 Items.Add(newItem);
             }
         });
 
         DeleteSelectedItemCommand = ReactiveCommand.Create(() => {
-            if (SelectedItem != null)
+            if (SelectedItem is HierarchyItemViewModel itemVm)
             {
-                if (SelectedItem.Parent != null)
+                _entityManager.DestroyEntity(itemVm.Entity);
+
+                if (itemVm.Parent != null)
                 {
-                    SelectedItem.Parent.Children.Remove(SelectedItem);
+                    itemVm.Parent.Children.Remove(itemVm);
                 }
                 else
                 {
-                    Items.Remove(SelectedItem);
+                    Items.Remove(itemVm);
                 }
                 SelectedItem = null;
             }
@@ -88,6 +104,17 @@ public class HierarchyViewModel : ReactiveObject
                 SelectedItem.BeginRenameCommand.Execute(null);
             }
         });
+    }
+
+    private IHierarchyItem CreateHierarchyItem(Entity entity)
+    {
+        var vm = new HierarchyItemViewModel 
+        { 
+            Entity = entity,
+            Name = $"Entity {entity.Id}"
+        };
+        vm.RequestDelete += OnItemDeletedRequest;
+        return vm;
     }
 
     /// <summary>

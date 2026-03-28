@@ -25,6 +25,7 @@ public class EditorPackage : IPackageEntry, IApplicationHost
         
         // Emulate the original Program.cs startup logic
         AppBuilder.Configure<App>()
+            .UsePlatformDetect() // Essential for desktop platform services
             .WithInterFont()
             .LogToTrace()
             .UseReactiveUI()
