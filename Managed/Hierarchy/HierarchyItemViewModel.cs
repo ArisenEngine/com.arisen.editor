@@ -3,6 +3,7 @@ using System.Windows.Input;
 using Avalonia.Media.Imaging;
 using ReactiveUI;
 using System;
+using ArisenEngine.Core.ECS;
 
 namespace ArisenEditorFramework.Hierarchy;
 
@@ -12,7 +13,8 @@ namespace ArisenEditorFramework.Hierarchy;
 /// </summary>
 public class HierarchyItemViewModel : ReactiveObject, IHierarchyItem
 {
-    private string _name = "New Item";
+    private string _name = "New Entity";
+    private Entity _entity;
     private Bitmap? _icon;
     private bool _isExpanded;
     private bool _isSelected;
@@ -20,7 +22,13 @@ public class HierarchyItemViewModel : ReactiveObject, IHierarchyItem
     private bool _isLeaf = false;
     private object? _tag;
     private IHierarchyItem? _parent;
-    
+
+    public Entity Entity
+    {
+        get => _entity;
+        set => this.RaiseAndSetIfChanged(ref _entity, value);
+    }
+
     public string Name
     {
         get => _name;

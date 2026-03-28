@@ -71,37 +71,75 @@ namespace ArisenEditor
                     args.Handled = true;
                 };
 
+                // 1. Check Unified Project Context from Kernel first! (Launcher/Host already set this)
+                var kernel = ArisenKernel.Lifecycle.EngineKernel.Instance;
+                var projectSubsystem = kernel.Services.GetService<ArisenKernel.Lifecycle.ProjectSubsystem>();
+
+                if (projectSubsystem != null && !string.IsNullOrEmpty(projectSubsystem.ProjectDir))
+                {
+                    string unifiedProjectPath = Path.Combine(projectSubsystem.ProjectDir, $"{projectSubsystem.ActiveProject?.Name ?? "Project"}.arisenproj");
+                    
+                    EditorLog.Info($"[Startup] Found Unified Project Context: {projectSubsystem.ProjectDir}. Booting directly.");
+                    
+                    Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
+                    {
+                        try
+                        {
+                            await ExecuteBootstrapSequence(desktop, unifiedProjectPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            EditorLog.Error($"[Startup] Unhandled exception in unified boot: {ex}");
+                            await MessageBoxUtility.ShowMessageBoxStandard("Fatal Error", ex.Message);
+                            desktop.Shutdown();
+                        }
+                    });
+                    
+                    base.OnFrameworkInitializationCompleted();
+                    return;
+                }
+
+                // 2. Fallback: Legacy Command Line Parsing (-project or --workspace)
                 string[] args = Environment.GetCommandLineArgs();
-                string? projectPath = null;
+                string? projectPathArg = null;
                 for (int i = 0; i < args.Length; i++)
                 {
-                    if (args[i] == "-project" && i + 1 < args.Length)
+                    if ((args[i] == "-project" || args[i] == "--workspace") && i + 1 < args.Length)
                     {
-                        projectPath = args[i + 1];
+                        string val = args[i + 1];
+                        if (Directory.Exists(val))
+                        {
+                             // It's a workspace dir, look for .arisenproj
+                             var files = Directory.GetFiles(val, "*.arisenproj");
+                             if (files.Length > 0) projectPathArg = files[0];
+                        }
+                        else if (File.Exists(val))
+                        {
+                             projectPathArg = val;
+                        }
                         break;
                     }
                 }
 
-                if (!string.IsNullOrEmpty(projectPath) && File.Exists(projectPath))
+                if (!string.IsNullOrEmpty(projectPathArg))
                 {
                     Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
                     {
                         try
                         {
-                            await ExecuteBootstrapSequence(desktop, projectPath);
+                            await ExecuteBootstrapSequence(desktop, projectPathArg);
                         }
                         catch (Exception ex)
                         {
                             EditorLog.Error($"[Startup] Unhandled exception: {ex}");
-                            await MessageBoxUtility.ShowMessageBoxStandard("Fatal Error", 
-                                $"An unexpected error occurred during startup:\n{ex.Message}");
+                            await MessageBoxUtility.ShowMessageBoxStandard("Fatal Error", ex.Message);
                             desktop.Shutdown();
                         }
                     });
                 }
                 else
                 {
-                    // Use Post to ensure we've entered the main loop before showing UI
+                    // 3. Fallback: Show Manual Picker
                     Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
                     {
                         try
@@ -111,8 +149,7 @@ namespace ArisenEditor
                         catch (Exception ex)
                         {
                             EditorLog.Error($"[Startup] Unhandled exception: {ex}");
-                            await MessageBoxUtility.ShowMessageBoxStandard("Fatal Error", 
-                                $"An unexpected error occurred during startup:\n{ex.Message}");
+                            await MessageBoxUtility.ShowMessageBoxStandard("Fatal Error", ex.Message);
                             desktop.Shutdown();
                         }
                     });

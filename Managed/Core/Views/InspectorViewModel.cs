@@ -170,13 +170,12 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             var ActiveEntityManager = ArisenEditor.Core.Services.SceneManagerService.Instance.ActiveScene?.Registry;
             if (ActiveEntityManager == null) return;
 
-            foreach (var compInfo in ActiveEntityManager.GetEntityComponents(node.Entity))
+            foreach (var pool in ActiveEntityManager.GetEntityComponentPools(node.Entity))
             {
-                var compType = compInfo.Type;
-                var pool = compInfo.Pool;
+                var compType = pool.GetComponentType();
 
                 // Create a category for this component
-                var category = new InspectorCategoryViewModel(compType.Name);
+                var category = new ArisenEditorFramework.Inspector.InspectorCategoryViewModel(compType.Name);
                 Categories.Add(category);
 
                 // Discover fields (ECS components use fields for data per Rules.md)
