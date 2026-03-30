@@ -18,7 +18,7 @@ internal class ConsoleViewIconConverter : IValueConverter
         {
             if (m_Info == null)
             {
-                using (var fileStream = AssetLoader.Open(new Uri("avares://ArisenEditor/Assets/Icons/info.png")))
+                using (var fileStream = AssetLoader.Open(new Uri("avares://Com.Arisen.Editor/Assets/Icons/info.png")))
                 {
                     m_Info = new Bitmap(fileStream);
                 }
@@ -35,7 +35,7 @@ internal class ConsoleViewIconConverter : IValueConverter
         {
             if (m_Log == null)
             {
-                using (var fileStream = AssetLoader.Open(new Uri("avares://ArisenEditor/Assets/Icons/log.png")))
+                using (var fileStream = AssetLoader.Open(new Uri("avares://Com.Arisen.Editor/Assets/Icons/log.png")))
                 {
                     m_Log = new Bitmap(fileStream);
                 }
@@ -52,7 +52,7 @@ internal class ConsoleViewIconConverter : IValueConverter
         {
             if (m_Warning == null)
             {
-                using (var fileStream = AssetLoader.Open(new Uri("avares://ArisenEditor/Assets/Icons/warning.png")))
+                using (var fileStream = AssetLoader.Open(new Uri("avares://Com.Arisen.Editor/Assets/Icons/warning.png")))
                 {
                     m_Warning = new Bitmap(fileStream);
                 }
@@ -69,7 +69,7 @@ internal class ConsoleViewIconConverter : IValueConverter
         {
             if (m_Error == null)
             {
-                using (var fileStream = AssetLoader.Open(new Uri("avares://ArisenEditor/Assets/Icons/error.png")))
+                using (var fileStream = AssetLoader.Open(new Uri("avares://Com.Arisen.Editor/Assets/Icons/error.png")))
                 {
                     m_Error = new Bitmap(fileStream);
                 }

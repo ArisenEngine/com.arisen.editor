@@ -63,8 +63,8 @@ internal class SceneTreeNode : TreeNodeBase
         base.OnBeginEdit();
     }
 
-    protected override string LeafIconPath => "avares://ArisenEditor/Assets/Icons/entity-icon.png";
-    protected override string BranchIconPath => "avares://ArisenEditor/Assets/Icons/entity-icon.png";
-    protected override string BranchOpenIconPath => "avares://ArisenEditor/Assets/Icons/entity-icon.png";
-    protected override string RootIconPath => "avares://ArisenEditor/Assets/Icons/clapperboard.png";
+    protected override string LeafIconPath => "avares://Com.Arisen.Editor/Assets/Icons/entity-icon.png";
+    protected override string BranchIconPath => "avares://Com.Arisen.Editor/Assets/Icons/entity-icon.png";
+    protected override string BranchOpenIconPath => "avares://Com.Arisen.Editor/Assets/Icons/entity-icon.png";
+    protected override string RootIconPath => "avares://Com.Arisen.Editor/Assets/Icons/clapperboard.png";
 }

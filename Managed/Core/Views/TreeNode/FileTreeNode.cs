@@ -108,10 +108,10 @@ internal class FileTreeNode : TreeNodeBase
         }
     }
 
-    protected override string LeafIconPath => "avares://ArisenEditor/Assets/Icons/file.png";
-    protected override string BranchIconPath => "avares://ArisenEditor/Assets/Icons/folder.png";
-    protected override string BranchOpenIconPath => "avares://ArisenEditor/Assets/Icons/folder-open.png";
-    protected override string RootIconPath => "avares://ArisenEditor/Assets/Icons/AssetsRoot.png";
+    protected override string LeafIconPath => "avares://Com.Arisen.Editor/Assets/Icons/file.png";
+    protected override string BranchIconPath => "avares://Com.Arisen.Editor/Assets/Icons/folder.png";
+    protected override string BranchOpenIconPath => "avares://Com.Arisen.Editor/Assets/Icons/folder-open.png";
+    protected override string RootIconPath => "avares://Com.Arisen.Editor/Assets/Icons/AssetsRoot.png";
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
