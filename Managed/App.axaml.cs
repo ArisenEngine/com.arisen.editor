@@ -35,7 +35,7 @@ namespace ArisenEditor
             ThemeManager = new ArisenEditorFramework.Services.ThemeManager(this);
             
             // Add Arisen Theme Resources
-            Styles.Add((Avalonia.Styling.IStyle)AvaloniaXamlLoader.Load(new Uri("avares://ArisenEditorFramework/Resources/ArisenThemeResources.axaml")));
+            Styles.Add((Avalonia.Styling.IStyle)AvaloniaXamlLoader.Load(new Uri("avares://Com.Arisen.Editor/Resources/ArisenThemeResources.axaml")));
             
             AvaloniaXamlLoader.Load(this);
         }
