@@ -70,6 +70,8 @@ public unsafe class ECSFieldPropertyViewModel : PropertyItemViewModel
         }
     }
 
+    public void Refresh() => this.RaisePropertyChanged(nameof(Value));
+
     private readonly FieldInfo? _fieldInfo;
 
     public ECSFieldPropertyViewModel(Entity entity, IComponentPool pool, FieldInfo fieldInfo) 
@@ -190,6 +192,8 @@ public class ECSPropertyViewModel : PropertyItemViewModel
         }
     }
     
+    public void Refresh() => this.RaisePropertyChanged(nameof(Value));
+    
     private static object? TryParseVector3(string input)
     {
         var clean = input.Trim('<', '>', ' ', '\t');
@@ -231,6 +235,47 @@ public class ECSPropertyViewModel : PropertyItemViewModel
 internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorViewModel
 {
     public ArisenEditor.Core.Services.SelectionService? SelectionService { get; set; }
+
+    public InspectorViewModel()
+    {
+        var svc = ArisenEditor.Core.Services.SceneManagerService.Instance;
+        
+        svc.EntityNameChanged += (entity, name) =>
+        {
+            if (TargetObject is EntityNodeViewModel node && node.Entity == entity)
+            {
+                foreach (var category in Categories)
+                {
+                    if (category.CategoryName == typeof(NameComponent).Name)
+                    {
+                        foreach (var prop in category.Properties)
+                        {
+                            if (prop is ECSPropertyViewModel ecsProp) ecsProp.Refresh();
+                            else if (prop is ECSFieldPropertyViewModel ecsField) ecsField.Refresh();
+                        }
+                    }
+                }
+            }
+        };
+
+        svc.EntityComponentChanged += (entity, compType) =>
+        {
+            if (TargetObject is EntityNodeViewModel node && node.Entity == entity)
+            {
+                foreach (var category in Categories)
+                {
+                    if (category.CategoryName == compType.Name)
+                    {
+                        foreach (var prop in category.Properties)
+                        {
+                            if (prop is ECSPropertyViewModel ecsProp) ecsProp.Refresh();
+                            else if (prop is ECSFieldPropertyViewModel ecsField) ecsField.Refresh();
+                        }
+                    }
+                }
+            }
+        };
+    }
 
     protected override void RebuildProperties()
     {
