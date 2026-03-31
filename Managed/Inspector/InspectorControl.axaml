@@ -12,7 +12,8 @@
   </UserControl.Resources>
 
   <ScrollViewer>
-    <ItemsControl ItemsSource="{Binding Categories}">
+    <StackPanel>
+        <ItemsControl ItemsSource="{Binding Categories}">
       
       <!-- Category Template -->
       <ItemsControl.ItemTemplate>
@@ -51,7 +52,22 @@
         </DataTemplate>
       </ItemsControl.ItemTemplate>
       
-    </ItemsControl>
+        </ItemsControl>
+        
+        <ComboBox Margin="8,16,8,8"
+                  HorizontalAlignment="Stretch"
+                  PlaceholderText="Add Component..."
+                  IsVisible="{Binding CanAddComponent}"
+                  ItemsSource="{Binding AvailableComponentTypes}"
+                  SelectedItem="{Binding SelectedComponentToAdd, Mode=TwoWay}">
+            <ComboBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Name}" />
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+        
+    </StackPanel>
   </ScrollViewer>
   
 </UserControl>

@@ -236,8 +236,30 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
 {
     public ArisenEditor.Core.Services.SelectionService? SelectionService { get; set; }
 
+    private readonly System.Collections.Generic.List<Type> _allComponentTypes;
+
     public InspectorViewModel()
     {
+        _allComponentTypes = System.AppDomain.CurrentDomain.GetAssemblies()
+            .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } })
+            .Where(t => typeof(ArisenEngine.Core.ECS.IComponent).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract)
+            .OrderBy(t => t.Name)
+            .ToList();
+
+        AddComponentCommand = ReactiveUI.ReactiveCommand.Create<Type>(t => 
+        {
+            if (TargetObject is EntityNodeViewModel node && t != null)
+            {
+                var cmdMgr = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ArisenEngine.Core.Automation.ICommandManager>();
+                cmdMgr?.Execute(new ArisenEditor.Core.Commands.AddComponentCommand(node.Entity, t));
+                
+                // Defer the UI rebuild to the next tick. 
+                // This prevents Avalonia's ComboBox from crashing when its ItemsSource vanishes 
+                // while it's still processing the selection event.
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => RebuildProperties(), Avalonia.Threading.DispatcherPriority.Background);
+            }
+        });
+
         var svc = ArisenEditor.Core.Services.SceneManagerService.Instance;
         
         svc.EntityNameChanged += (entity, name) =>
@@ -295,12 +317,18 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         // 2. Check if we are inspecting a specialized EntityNode
         if (TargetObject is EntityNodeViewModel node)
         {
+            CanAddComponent = true;
+            AvailableComponentTypes.Clear();
+
             var ActiveEntityManager = ArisenEditor.Core.Services.SceneManagerService.Instance.ActiveScene?.Registry;
             if (ActiveEntityManager == null) return;
+
+            var currentComponents = new System.Collections.Generic.HashSet<Type>();
 
             foreach (var pool in ActiveEntityManager.GetEntityComponentPools(node.Entity))
             {
                 var compType = pool.GetComponentType();
+                currentComponents.Add(compType);
 
                 // Create a category for this component
                 var category = new ArisenEditorFramework.Inspector.InspectorCategoryViewModel(compType.Name);
@@ -325,9 +353,20 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
                     category.Properties.Add(propVm);
                 }
             }
+
+            // Populate AvailableComponentTypes
+            foreach(var t in _allComponentTypes)
+            {
+                if (!currentComponents.Contains(t))
+                {
+                    AvailableComponentTypes.Add(t);
+                }
+            }
         }
         else
         {
+            CanAddComponent = false;
+            AvailableComponentTypes.Clear();
             // 3. Fallback to standard reflection for non-ECS objects
             base.RebuildProperties();
         }
