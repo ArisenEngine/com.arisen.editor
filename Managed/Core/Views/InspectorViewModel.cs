@@ -142,6 +142,103 @@ public unsafe class ECSFieldPropertyViewModel : PropertyItemViewModel
 }
 
 /// <summary>
+/// A specialized ECS-aware property item that knows how to read/write properties
+/// back to the ComponentPool memory. Properties require boxing/unboxing since they invoke method calls.
+/// </summary>
+public class ECSPropertyViewModel : PropertyItemViewModel
+{
+    private readonly Entity _entity;
+    private readonly IComponentPool _pool;
+    private readonly PropertyInfo _propInfo;
+
+    public ECSPropertyViewModel(Entity entity, IComponentPool pool, PropertyInfo propInfo) 
+        : base(pool.GetBoxed(entity), propInfo.Name, propInfo.PropertyType, !propInfo.CanWrite, pool.GetComponentType().Name)
+    {
+        _entity = entity;
+        _pool = pool;
+        _propInfo = propInfo;
+        
+        ApplyAttributes(propInfo);
+    }
+    
+    public override object? Value
+    {
+        get
+        {
+            var ptr = _pool.GetAddress(_entity);
+            if (ptr == IntPtr.Zero) return null;
+
+            var component = _pool.GetBoxed(_entity);
+            return _propInfo.GetValue(component);
+        }
+        set
+        {
+            if (IsReadOnly) return;
+
+            var ptr = _pool.GetAddress(_entity);
+            if (ptr == IntPtr.Zero) return;
+
+            var component = _pool.GetBoxed(_entity);
+
+            object? converted = TryConvert(value, PropertyType);
+            
+            // Handle Vector3 and Quaternion strings coming from Avalonia bindings
+            if (converted is string strValue)
+            {
+                if (PropertyType == typeof(System.Numerics.Vector3))
+                {
+                    converted = TryParseVector3(strValue);
+                    if (converted == null) return;
+                }
+                else if (PropertyType == typeof(System.Numerics.Quaternion))
+                {
+                    converted = TryParseQuaternion(strValue);
+                    if (converted == null) return;
+                }
+            }
+            
+            _propInfo.SetValue(component, converted);
+            _pool.SetBoxed(_entity, component);
+            
+            this.RaisePropertyChanged(nameof(Value));
+        }
+    }
+    
+    private static object? TryParseVector3(string input)
+    {
+        var clean = input.Trim('<', '>', ' ', '\t');
+        var parts = clean.Split(',');
+        if (parts.Length == 3 && 
+            float.TryParse(parts[0], out float x) &&
+            float.TryParse(parts[1], out float y) &&
+            float.TryParse(parts[2], out float z))
+        {
+            return new System.Numerics.Vector3(x, y, z);
+        }
+        return null;
+    }
+
+    private static object? TryParseQuaternion(string input)
+    {
+        var clean = input.Replace("{", "").Replace("}", "").Replace("<", "").Replace(">", "").Trim();
+        var parts = clean.Split(new[] { ' ', ',', ':' }, StringSplitOptions.RemoveEmptyEntries);
+        
+        var values = new System.Collections.Generic.List<float>();
+        foreach (var p in parts)
+        {
+            if (float.TryParse(p, out float v))
+                values.Add(v);
+        }
+        
+        if (values.Count >= 4)
+        {
+            return new System.Numerics.Quaternion(values[0], values[1], values[2], values[3]);
+        }
+        return null;
+    }
+}
+
+/// <summary>
 /// Overrides the standard Inspector to detect when an ECS Entity is selected.
 /// It dynamically builds categories based on the components attached to the entity.
 /// </summary>
@@ -190,9 +287,11 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
                 var props = compType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
                 foreach (var prop in props)
                 {
-                    // We can reuse standard logic for properties if they are simple, 
-                    // but for structs we'd need an ECSPropertyPropertyViewModel...
-                    // For now, focusing on Fields as per DOD rules.
+                    // Filter out any properties we don't want to show
+                    if (prop.Name == "TypeId") continue; // Avoid internal properties if any
+                    
+                    var propVm = new ECSPropertyViewModel(node.Entity, pool, prop);
+                    category.Properties.Add(propVm);
                 }
             }
         }
