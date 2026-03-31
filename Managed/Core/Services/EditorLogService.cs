@@ -12,7 +12,7 @@ public class EditorLogService : LogService
     {
     }
 
-    public new void Info(string message)
+    public override void Info(string message)
     {
         base.Info(message);
         Notify(Logger.LogLevel.Info, message);
@@ -24,21 +24,24 @@ public class EditorLogService : LogService
         Notify(Logger.LogLevel.Log, message);
     }
 
-    public new void Warning(string message)
+    public override void Warning(string message)
     {
-        base.Warning(message);
+        string fullMessage = $"{message}\n{Environment.StackTrace}";
+        base.Warning(fullMessage);
         Notify(Logger.LogLevel.Warning, message);
     }
 
-    public new void Error(string message, Exception? ex = null)
+    public override void Error(string message, Exception? ex = null)
     {
-        base.Error(message, ex);
+        string fullMessage = $"{message}{(ex != null ? $"\nException: {ex}" : "")}\n{Environment.StackTrace}";
+        base.Error(fullMessage);
         Notify(Logger.LogLevel.Error, $"{message}{(ex != null ? $"\n{ex}" : "")}");
     }
 
-    public new void Critical(string message, Exception? ex = null)
+    public override void Critical(string message, Exception? ex = null)
     {
-        base.Critical(message, ex);
+        string fullMessage = $"{message}{(ex != null ? $"\nException: {ex}" : "")}\n{Environment.StackTrace}";
+        base.Critical(fullMessage);
         Notify(Logger.LogLevel.Fatal, $"{message}{(ex != null ? $"\n{ex}" : "")}");
     }
 

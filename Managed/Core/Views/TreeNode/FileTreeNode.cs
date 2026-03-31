@@ -101,7 +101,10 @@ internal class FileTreeNode : TreeNodeBase
             }
             else
             {
-                EditorLog.Warning($"[FileTreeNode] Directory does not exist or path is empty: '{Path}'");
+                if (!string.IsNullOrEmpty(Path) && !IsVirtual)
+                {
+                    EditorLog.Warning($"[FileTreeNode] Directory does not exist: '{Path}'");
+                }
                 m_IsLoaded = true; // Still set to true to prevent infinite retry loops in UI
             }
         }

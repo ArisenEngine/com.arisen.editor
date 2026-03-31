@@ -95,6 +95,15 @@ public class SceneManagerService : ReactiveObject
     /// </summary>
     public bool LoadScene(string path)
     {
+        if (!Path.IsPathRooted(path))
+        {
+            var env = EngineKernel.Instance.GetSubsystem<EnvironmentSubsystem>();
+            if (env != null && !string.IsNullOrEmpty(env.ProjectRoot))
+            {
+                path = Path.GetFullPath(Path.Combine(env.ProjectRoot, path));
+            }
+        }
+
         if (!File.Exists(path))
         {
             EditorLog.Error($"[SceneManager] Cannot load scene. File not found: {path}");
