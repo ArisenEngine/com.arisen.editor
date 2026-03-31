@@ -11,10 +11,20 @@ public class LogService : ILogService
     public LogService(string logFileName)
     {
         string logDir = Path.Combine(AppContext.BaseDirectory, "logs");
-        _logFilePath = Path.Combine(logDir, logFileName);
+        if (!Directory.Exists(logDir))
+        {
+            Directory.CreateDirectory(logDir);
+        }
+
+        string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        string fileWithoutExt = Path.GetFileNameWithoutExtension(logFileName);
+        string ext = Path.GetExtension(logFileName);
+        string finalFileName = $"{fileWithoutExt}_{timestamp}{ext}";
+
+        _logFilePath = Path.Combine(logDir, finalFileName);
         
         // Start fresh log session
-        Info($"=== {logFileName} Session Started ===");
+        Info($"=== {finalFileName} Session Started ===");
     }
 
     public virtual void Info(string message) => Log(LogLevel.Info, message);

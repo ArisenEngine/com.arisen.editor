@@ -1,12 +1,9 @@
-using System;
-using System.IO;
+
 using ArisenEngine.Core.ECS;
 using ArisenEngine.Core.Lifecycle;
-using ArisenEngine.Core.Serialization;
 using ArisenEngine.Resources.Serialization;
 using ArisenEngine.Models;
 using ReactiveUI;
-using ArisenEngine.Core.Diagnostics;
 
 namespace ArisenEditor.Core.Services;
 
@@ -101,6 +98,10 @@ public class SceneManagerService : ReactiveObject
             if (env != null && !string.IsNullOrEmpty(env.ProjectRoot))
             {
                 path = Path.GetFullPath(Path.Combine(env.ProjectRoot, path));
+            }
+            else
+            {
+                EditorLog.Error("[SceneManager] env root is null.");
             }
         }
 
