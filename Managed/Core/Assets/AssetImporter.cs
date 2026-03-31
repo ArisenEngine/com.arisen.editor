@@ -12,14 +12,13 @@ namespace ArisenEditor.Core.Assets;
 public class AssetImporter : IDisposable
 {
     private readonly string _assetsDirectory;
+    private readonly string _workspaceRoot;
     private FileSystemWatcher? _watcher;
 
-    // A simple debounce mechanism could be added here in a production engine
-    // to prevent rapid successive imports of the same file.
-
-    public AssetImporter(string assetsDirectory)
+    public AssetImporter(string assetsDirectory, string workspaceRoot)
     {
         _assetsDirectory = assetsDirectory;
+        _workspaceRoot = workspaceRoot;
     }
 
     public void Start()
@@ -50,13 +49,15 @@ public class AssetImporter : IDisposable
     {
         foreach (var file in Directory.GetFiles(directory, "*.*", SearchOption.AllDirectories))
         {
-            if (file.EndsWith(".meta")) continue;
+            if (IsIgnoredPath(file)) continue;
             ProcessFile(file);
         }
     }
 
     private void ProcessFile(string filePath)
     {
+        if (Directory.Exists(filePath)) return;
+
         try
         {
             var metaPath = filePath + ".meta";
@@ -82,7 +83,7 @@ public class AssetImporter : IDisposable
                 SerializationUtil.Serialize(meta, metaPath);
             }
 
-            var relativePath = Path.GetRelativePath(_assetsDirectory, filePath).Replace('\\', '/');
+            var relativePath = Path.GetRelativePath(_workspaceRoot, filePath).Replace('\\', '/');
             var ext = Path.GetExtension(filePath).TrimStart('.');
             var lastModified = new DateTimeOffset(File.GetLastWriteTimeUtc(filePath)).ToUnixTimeSeconds();
 
@@ -90,14 +91,15 @@ public class AssetImporter : IDisposable
         }
         catch (Exception ex)
         {
+            // If the file is locked, we just skip it for now. The Watcher will fire again if it changes.
             // In a real editor, route this to LogService.Error
-            Console.WriteLine($"Error processing file {filePath}: {ex.Message}");
+            ArisenEngine.Core.Diagnostics.Logger.Log($"[AssetImporter] Error processing {filePath}: {ex.Message}");
         }
     }
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)
     {
-        if (e.FullPath.EndsWith(".meta")) return;
+        if (IsIgnoredPath(e.FullPath)) return;
         
         // Add a small delay because FileSystemWatcher often fires before the file is fully written/unlocked
         Task.Delay(100).ContinueWith(_ => ProcessFile(e.FullPath));
@@ -112,7 +114,7 @@ public class AssetImporter : IDisposable
             return;
         }
 
-        var relativePath = Path.GetRelativePath(_assetsDirectory, e.FullPath).Replace('\\', '/');
+        var relativePath = Path.GetRelativePath(_workspaceRoot, e.FullPath).Replace('\\', '/');
         
         // Remove from DB
         AssetDatabase.Instance.RemoveAssetByPath(relativePath);
@@ -127,10 +129,10 @@ public class AssetImporter : IDisposable
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
-        if (e.FullPath.EndsWith(".meta")) return;
+        if (IsIgnoredPath(e.FullPath)) return;
 
-        var oldRelativePath = Path.GetRelativePath(_assetsDirectory, e.OldFullPath).Replace('\\', '/');
-        var newRelativePath = Path.GetRelativePath(_assetsDirectory, e.FullPath).Replace('\\', '/');
+        var oldRelativePath = Path.GetRelativePath(_workspaceRoot, e.OldFullPath).Replace('\\', '/');
+        var newRelativePath = Path.GetRelativePath(_workspaceRoot, e.FullPath).Replace('\\', '/');
 
         // Note: Renaming requires reading the Guid to update the DB, or updating by old path.
         if (AssetDatabase.Instance.TryGetGuid(oldRelativePath, out var guid))
@@ -153,8 +155,35 @@ public class AssetImporter : IDisposable
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
-        if (e.FullPath.EndsWith(".meta")) return;
+        if (IsIgnoredPath(e.FullPath)) return;
         Task.Delay(100).ContinueWith(_ => ProcessFile(e.FullPath));
+    }
+
+    private bool IsIgnoredPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return true;
+        if (path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var name = Path.GetFileName(path);
+        if (name.StartsWith(".")) return true;
+
+        var dir = Path.GetDirectoryName(path);
+        while (!string.IsNullOrEmpty(dir))
+        {
+            var dirName = Path.GetFileName(dir);
+            if (dirName.EndsWith(".arisen")) break; // Don't check parents above the project root if known
+            if (dirName.StartsWith(".")) return true;
+            dir = Path.GetDirectoryName(dir);
+        }
+
+        try 
+        {
+            var attr = File.GetAttributes(path);
+            if ((attr & FileAttributes.Hidden) != 0 || (attr & FileAttributes.System) != 0) return true;
+        }
+        catch { }
+
+        return false;
     }
 
     public void Dispose()

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -13,7 +13,7 @@ namespace ArisenEditor.ViewModels;
 
 internal abstract class TreeNodeBase : ReactiveObject, IHierarchyItem, IEditableObject
 {
-    private bool m_IsExpanded;
+    protected bool m_IsExpanded;
 
     public virtual bool IsExpanded
     {

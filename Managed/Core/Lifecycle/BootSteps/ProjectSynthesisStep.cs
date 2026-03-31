@@ -37,7 +37,7 @@ public class ProjectSynthesisStep : IBootStep
 
     private void EnsureDefaultSceneExists(string projectRoot)
     {
-        string contentDir = Path.Combine(projectRoot, "Content");
+        string contentDir = Path.Combine(projectRoot, "Assets");
         if (!Directory.Exists(contentDir))
         {
             Directory.CreateDirectory(contentDir);

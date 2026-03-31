@@ -53,7 +53,7 @@ public class EditorProjectService
     public void LoadUserSettings()
     {
         var env = EngineKernel.Instance.GetSubsystem<EnvironmentSubsystem>();
-        string libraryPath = Path.Combine(env?.ProjectRoot ?? string.Empty, "Library");
+        string libraryPath = Path.Combine(env?.ProjectRoot ?? string.Empty, ".Cache");
         string settingsPath = Path.Combine(libraryPath, "EditorUserSettings.arisen_settings");
 
         if (File.Exists(settingsPath))
@@ -77,7 +77,7 @@ public class EditorProjectService
     public void SaveUserSettings()
     {
         var env = EngineKernel.Instance.GetSubsystem<EnvironmentSubsystem>();
-        string libraryPath = Path.Combine(env?.ProjectRoot ?? string.Empty, "Library");
+        string libraryPath = Path.Combine(env?.ProjectRoot ?? string.Empty, ".Cache");
         
         if (!Directory.Exists(libraryPath))
         {

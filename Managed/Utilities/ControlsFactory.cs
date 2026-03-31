@@ -14,7 +14,7 @@ public static class ControlsFactory
     {
         "File",
         "Edit",
-        "Content",
+        "Assets",
         "Entity",
         "Component",
         "GameObject", // Match design
