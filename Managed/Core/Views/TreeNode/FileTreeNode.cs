@@ -64,9 +64,15 @@ internal class FileTreeNode : TreeNodeBase
 
     private void LoadChildren()
     {
-        if (!IsBranch || (m_IsLoaded && !IsVirtual)) 
+        if (!IsBranch || m_IsLoaded) 
         {
-            if (IsVirtual) EditorLog.Log($"[FileTreeNode] Skipping LoadChildren for Virtual node: {Name}");
+            return;
+        }
+
+        if (IsVirtual)
+        {
+            EditorLog.Log($"[FileTreeNode] Skipping LoadChildren for Virtual node: {Name}");
+            m_IsLoaded = true;
             return;
         }
         
