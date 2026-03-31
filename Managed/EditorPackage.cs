@@ -2,6 +2,9 @@ using ArisenKernel.Packages;
 using ArisenKernel.Services;
 using ArisenKernel.Contracts;
 using System;
+using ArisenEditor.Core.Services;
+using ArisenEditorFramework.Services;
+using ArisenKernel.Diagnostics;
 using Avalonia;
 using Avalonia.ReactiveUI;
 
@@ -11,7 +14,8 @@ public class EditorPackage : IPackageEntry, IApplicationHost
 {
     public void OnLoad(IServiceRegistry registry)
     {
-        Console.WriteLine("[EditorPackage] Registering Arisen Editor Avalonia Host.");
+        EditorLog.Initialize(new LogService("editor"));
+        EditorLog.Info("[EditorPackage] Registering Arisen Editor Avalonia Host.");
         registry.RegisterService<IApplicationHost>(this);
     }
 
@@ -21,7 +25,7 @@ public class EditorPackage : IPackageEntry, IApplicationHost
 
     public void Run(string[] args)
     {
-        Console.WriteLine("[EditorPackage] Taking over Main Thread for Avalonia UI Loop...");
+        EditorLog.Info("[EditorPackage] Taking over Main Thread for Avalonia UI Loop...");
         
         // Emulate the original Program.cs startup logic
         AppBuilder.Configure<App>()
