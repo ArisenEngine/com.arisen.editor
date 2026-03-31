@@ -97,23 +97,116 @@ public class Vector3PropertyEditor : IPropertyEditor
     {
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*") };
         
-        for (int i = 0; i < 3; i++)
+        var xNum = new NumericUpDown { Margin = new Avalonia.Thickness(0), FormatString = "0.00", ShowButtonSpinner = false, Watermark = "X" };
+        var yNum = new NumericUpDown { Margin = new Avalonia.Thickness(4, 0, 0, 0), FormatString = "0.00", ShowButtonSpinner = false, Watermark = "Y" };
+        var zNum = new NumericUpDown { Margin = new Avalonia.Thickness(4, 0, 0, 0), FormatString = "0.00", ShowButtonSpinner = false, Watermark = "Z" };
+
+        grid.Children.Add(xNum); Grid.SetColumn(xNum, 0);
+        grid.Children.Add(yNum); Grid.SetColumn(yNum, 1);
+        grid.Children.Add(zNum); Grid.SetColumn(zNum, 2);
+
+        void UpdateFromViewModel()
         {
-            var component = new NumericUpDown 
-            { 
-                Margin = new Avalonia.Thickness(i == 0 ? 0 : 4, 0, 0, 0),
-                ShowButtonSpinner = false,
-                FormatString = "0.00"
-            };
-            // In a real implementation, we'd bind to X, Y, Z sub-properties
-            // For now, this is a placeholder for the visual refactor
-            grid.Children.Add(component);
-            Grid.SetColumn(component, i);
+            if (property.Value is System.Numerics.Vector3 vec)
+            {
+                xNum.Value = (decimal)vec.X;
+                yNum.Value = (decimal)vec.Y;
+                zNum.Value = (decimal)vec.Z;
+            }
         }
+
+        UpdateFromViewModel();
         
+        property.PropertyChanged += (s, e) => {
+            if (e.PropertyName == nameof(PropertyItemViewModel.Value))
+            {
+                // We need to dispatch to UI thread if we are not on it, but the property changes from UI usually
+                Avalonia.Threading.Dispatcher.UIThread.Post(UpdateFromViewModel);
+            }
+        };
+
+        var onValueChangedHandler = new EventHandler<NumericUpDownValueChangedEventArgs>((sender, e) =>
+        {
+            if (property.IsReadOnly) return;
+            var newVec = new System.Numerics.Vector3(
+                (float)(xNum.Value ?? 0m),
+                (float)(yNum.Value ?? 0m),
+                (float)(zNum.Value ?? 0m)
+            );
+            property.Value = newVec;
+        });
+
+        xNum.ValueChanged += onValueChangedHandler;
+        yNum.ValueChanged += onValueChangedHandler;
+        zNum.ValueChanged += onValueChangedHandler;
+
         return grid;
     }
 }
+
+public class QuaternionPropertyEditor : IPropertyEditor
+{
+    public bool CanHandle(PropertyItemViewModel property) 
+    {
+        var type = property.PropertyType;
+        return type.Name == "Quaternion" || type.FullName == "System.Numerics.Quaternion";
+    }
+
+    public Control CreateControl(PropertyItemViewModel property)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*") };
+        
+        var xNum = new NumericUpDown { Margin = new Avalonia.Thickness(0), FormatString = "0.00", ShowButtonSpinner = false, Watermark = "X" };
+        var yNum = new NumericUpDown { Margin = new Avalonia.Thickness(4, 0, 0, 0), FormatString = "0.00", ShowButtonSpinner = false, Watermark = "Y" };
+        var zNum = new NumericUpDown { Margin = new Avalonia.Thickness(4, 0, 0, 0), FormatString = "0.00", ShowButtonSpinner = false, Watermark = "Z" };
+        var wNum = new NumericUpDown { Margin = new Avalonia.Thickness(4, 0, 0, 0), FormatString = "0.00", ShowButtonSpinner = false, Watermark = "W" };
+
+        grid.Children.Add(xNum); Grid.SetColumn(xNum, 0);
+        grid.Children.Add(yNum); Grid.SetColumn(yNum, 1);
+        grid.Children.Add(zNum); Grid.SetColumn(zNum, 2);
+        grid.Children.Add(wNum); Grid.SetColumn(wNum, 3);
+
+        void UpdateFromViewModel()
+        {
+            if (property.Value is System.Numerics.Quaternion q)
+            {
+                xNum.Value = (decimal)q.X;
+                yNum.Value = (decimal)q.Y;
+                zNum.Value = (decimal)q.Z;
+                wNum.Value = (decimal)q.W;
+            }
+        }
+
+        UpdateFromViewModel();
+        
+        property.PropertyChanged += (s, e) => {
+            if (e.PropertyName == nameof(PropertyItemViewModel.Value))
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(UpdateFromViewModel);
+            }
+        };
+
+        var onValueChangedHandler = new EventHandler<NumericUpDownValueChangedEventArgs>((sender, e) =>
+        {
+            if (property.IsReadOnly) return;
+            var newQ = new System.Numerics.Quaternion(
+                (float)(xNum.Value ?? 0m),
+                (float)(yNum.Value ?? 0m),
+                (float)(zNum.Value ?? 0m),
+                (float)(wNum.Value ?? 0m)
+            );
+            property.Value = newQ;
+        });
+
+        xNum.ValueChanged += onValueChangedHandler;
+        yNum.ValueChanged += onValueChangedHandler;
+        zNum.ValueChanged += onValueChangedHandler;
+        wNum.ValueChanged += onValueChangedHandler;
+
+        return grid;
+    }
+}
+
 public class ColorPropertyEditor : IPropertyEditor
 {
     public bool CanHandle(PropertyItemViewModel property) 
