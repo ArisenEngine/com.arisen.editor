@@ -4,7 +4,6 @@ using ArisenEditorFramework.Attributes;
 using ArisenEditor.GameDev;
 using ArisenEditor.Utilities;
 using ArisenEngine;
-using ArisenEngine;
 using ArisenEngine.Core.Lifecycle;
 
 namespace ArisenEditor.Internal.MenuItemEntries;
@@ -51,7 +50,11 @@ internal partial class HeaderMenuEntries
     [MenuItem("Header/File/Save")]
     internal static void Save()
     {
-        
+        var svc = ArisenEditor.Core.Services.SceneManagerService.Instance;
+        if (svc.ActiveScene != null && svc.IsDirty)
+        {
+            svc.SaveCurrentScene();
+        }
     }
 
     #endregion

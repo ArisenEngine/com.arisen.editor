@@ -19,8 +19,31 @@ public class InspectorViewModel : EditorPanelBase
     public override object Content => new InspectorControl { DataContext = this };
 
     private object? _targetObject;
+    private bool _canAddComponent;
 
     public ObservableCollection<InspectorCategoryViewModel> Categories { get; } = new();
+    public ObservableCollection<Type> AvailableComponentTypes { get; } = new();
+
+    public System.Windows.Input.ICommand? AddComponentCommand { get; protected set; }
+
+    public bool CanAddComponent
+    {
+        get => _canAddComponent;
+        protected set => this.RaiseAndSetIfChanged(ref _canAddComponent, value);
+    }
+
+    public Type? SelectedComponentToAdd
+    {
+        get => null;
+        set
+        {
+            if (value != null && AddComponentCommand != null && AddComponentCommand.CanExecute(value))
+            {
+                AddComponentCommand.Execute(value);
+                this.RaisePropertyChanged(nameof(SelectedComponentToAdd));
+            }
+        }
+    }
 
     /// <summary>
     /// The object currently being inspected. Setting this triggers a full reflection pass.
