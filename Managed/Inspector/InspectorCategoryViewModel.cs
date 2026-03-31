@@ -23,6 +23,21 @@ public class InspectorCategoryViewModel : ReactiveObject
         set => this.RaiseAndSetIfChanged(ref _isExpanded, value);
     }
 
+    private System.Windows.Input.ICommand? _removeCommand;
+    private bool _canRemove;
+    
+    public System.Windows.Input.ICommand? RemoveCommand
+    {
+        get => _removeCommand;
+        set => this.RaiseAndSetIfChanged(ref _removeCommand, value);
+    }
+
+    public bool CanRemove
+    {
+        get => _canRemove;
+        set => this.RaiseAndSetIfChanged(ref _canRemove, value);
+    }
+
     public ObservableCollection<PropertyItemViewModel> Properties { get; } = new();
 
     public InspectorCategoryViewModel(string categoryName)

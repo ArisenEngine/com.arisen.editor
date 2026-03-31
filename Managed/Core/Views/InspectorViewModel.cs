@@ -334,6 +334,17 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
                 var category = new ArisenEditorFramework.Inspector.InspectorCategoryViewModel(compType.Name);
                 Categories.Add(category);
 
+                // Wire Remove button (Undo/Redo supported)
+                category.CanRemove = (compType != typeof(NameComponent)); // Don't allow removing Name component
+                category.RemoveCommand = ReactiveUI.ReactiveCommand.Create(() => 
+                {
+                    var cmdMgr = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ArisenEngine.Core.Automation.ICommandManager>();
+                    cmdMgr?.Execute(new ArisenEditor.Core.Commands.RemoveComponentCommand(node.Entity, compType));
+                    
+                    // Defer refresh to let UI close expander smoothly
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() => RebuildProperties(), Avalonia.Threading.DispatcherPriority.Background);
+                });
+
                 // Discover fields (ECS components use fields for data per Rules.md)
                 var fields = compType.GetFields(BindingFlags.Public | BindingFlags.Instance);
                 foreach (var field in fields)

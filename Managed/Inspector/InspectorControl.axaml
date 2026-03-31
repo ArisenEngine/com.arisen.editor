@@ -18,10 +18,23 @@
       <!-- Category Template -->
       <ItemsControl.ItemTemplate>
         <DataTemplate DataType="{x:Type local:InspectorCategoryViewModel}">
-            <Expander Header="{Binding CategoryName}" 
-                      IsExpanded="{Binding IsExpanded, Mode=TwoWay}"
+            <Expander IsExpanded="{Binding IsExpanded, Mode=TwoWay}"
                       HorizontalAlignment="Stretch"
                       Padding="0" Margin="0,0,0,2">
+                <Expander.Header>
+                    <Grid ColumnDefinitions="*, Auto">
+                        <TextBlock Text="{Binding CategoryName}" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                        <Button Grid.Column="1" 
+                                Command="{Binding RemoveCommand}"
+                                IsVisible="{Binding CanRemove}"
+                                Content="x"
+                                Padding="4,0"
+                                Margin="4,0,0,0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTip.Tip="Remove Component"/>
+                    </Grid>
+                </Expander.Header>
                 
                 <!-- Properties within the Category -->
                 <ItemsControl ItemsSource="{Binding Properties}">
