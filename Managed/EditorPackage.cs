@@ -14,7 +14,7 @@ public class EditorPackage : IPackageEntry, IApplicationHost
 {
     public void OnLoad(IServiceRegistry registry)
     {
-        EditorLog.Initialize(new LogService("editor"));
+        EditorLog.Initialize(new EditorLogService("editor.log"));
         EditorLog.Info("[EditorPackage] Registering Arisen Editor Avalonia Host.");
         registry.RegisterService<IApplicationHost>(this);
     }

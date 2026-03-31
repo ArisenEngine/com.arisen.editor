@@ -17,10 +17,10 @@ public class LogService : ILogService
         Info($"=== {logFileName} Session Started ===");
     }
 
-    public void Info(string message) => Log(LogLevel.Info, message);
-    public void Warning(string message) => Log(LogLevel.Warning, message);
-    public void Error(string message, Exception? ex = null) => Log(LogLevel.Error, $"{message}{(ex != null ? $"\nException: {ex}" : "")}");
-    public void Critical(string message, Exception? ex = null) => Log(LogLevel.Critical, $"{message}{(ex != null ? $"\nException: {ex}" : "")}");
+    public virtual void Info(string message) => Log(LogLevel.Info, message);
+    public virtual void Warning(string message) => Log(LogLevel.Warning, message);
+    public virtual void Error(string message, Exception? ex = null) => Log(LogLevel.Error, $"{message}{(ex != null ? $"\nException: {ex}" : "")}");
+    public virtual void Critical(string message, Exception? ex = null) => Log(LogLevel.Critical, $"{message}{(ex != null ? $"\nException: {ex}" : "")}");
 
     private void Log(LogLevel level, string message)
     {
