@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Threading;
 using ArisenEngine;
 using ArisenEditorFramework.UI.Menus;
 using ArisenEditorFramework.Services;
@@ -139,19 +140,91 @@ internal class AssetsBrowserViewModel : EditorPanelBase
 
     private void InitializeFolderSource()
     {
-        if (Design.IsDesignMode) return;
-
+        EditorLog.Log("[AssetsBrowserViewModel] Initializing Folder Source...");
         m_FolderSource.Clear();
-        var env = EngineKernel.Instance.GetSubsystem<EnvironmentSubsystem>();
-        var rootPath = env != null ? Path.Combine(env.ProjectRoot, "Content") : "Content";
-        var rootNode = new FileTreeNode("Content", rootPath, true, isRoot: true, true)
+        
+        var rootPath = FindAssetsRoot();
+        EditorLog.Log($"[AssetsBrowserViewModel] Resolved Assets Root: {rootPath}");
+
+        var rootNode = new FileTreeNode("Assets", rootPath, true, isRoot: true, false)
         {
             AllowDrag = false,
             AllowDrop = false
         };
-        m_FolderSource.Add(rootNode);
         
-        // Listen to selection changes if we implement them, or we can just update via property binding in the view
+        // Add "Packages" virtual folder - Create it FIRST
+        var packagesNode = new FileTreeNode("Packages", string.Empty, true, false, true, true)
+        {
+            AllowDrag = false,
+            AllowDrop = false
+        };
+
+        var packageSubsystem = EngineKernel.Instance.GetSubsystem<ArisenKernel.Packages.PackageSubsystem>();
+        if (packageSubsystem != null)
+        {
+            var packages = packageSubsystem.GetAllPackages().ToList();
+            ArisenEngine.Core.Diagnostics.Logger.Error($"[AssetsBrowserViewModel] PANIC DISCOVERY: Found {packages.Count} packages in the subsystem.");
+            EditorLog.Log($"[AssetsBrowserViewModel] Discovered {packages.Count} packages.");
+            foreach (var package in packages)
+            {
+                // Determine if package is Local (Mutable) or Registry/Cache (Immutable)
+                bool isImmutable = true;
+                if (package.RootPath.Contains("Local", StringComparison.OrdinalIgnoreCase))
+                {
+                    isImmutable = false;
+                }
+
+                string pkgPath = Path.GetFullPath(package.RootPath);
+                var pkgNode = new FileTreeNode(package.Id, pkgPath, true, false, isImmutable);
+                pkgNode.Parent = packagesNode;
+                
+                // Add to both collections for visibility
+                packagesNode.Children.Add(pkgNode);
+                packagesNode.Folders.Add(pkgNode);
+            }
+        }
+
+        // Add both root nodes to the source ONLY AFTER they are fully populated
+        m_FolderSource.Add(rootNode);
+        m_FolderSource.Add(packagesNode);
+        
+        // Explicitly set expanded state and refresh list
+        rootNode.IsExpanded = true;
+        packagesNode.IsExpanded = true;
+        
+        Dispatcher.UIThread.Post(() => {
+             SelectedFolder = rootNode;
+             RefreshAssetsList();
+             EditorLog.Log("[AssetsBrowserViewModel] Folder Source Initialization Complete.");
+        });
+    }
+
+    private string FindAssetsRoot()
+    {
+        var env = EngineKernel.Instance.GetSubsystem<EnvironmentSubsystem>();
+        
+        // Strategy 1: Environment Subsystem (Most Reliable)
+        if (env != null && !string.IsNullOrEmpty(env.ProjectRoot))
+        {
+            var path = Path.GetFullPath(Path.Combine(env.ProjectRoot, "Assets"));
+            if (Directory.Exists(path)) return path;
+        }
+        
+        // Strategy 2: Current Directory (Fallthrough)
+        var currentDir = Directory.GetCurrentDirectory();
+        var searchDir = currentDir;
+        while (!string.IsNullOrEmpty(searchDir))
+        {
+            var assetsPath = Path.Combine(searchDir, "Assets");
+            if (Directory.Exists(assetsPath)) return Path.GetFullPath(assetsPath);
+            
+            var parent = Directory.GetParent(searchDir);
+            if (parent == null) break;
+            searchDir = parent.FullName;
+        }
+        
+        // Strategy 3: Default relative
+        return Path.GetFullPath("Assets");
     }
 
     private void InitializeAssetsSource()
@@ -216,7 +289,7 @@ internal class AssetsBrowserViewModel : EditorPanelBase
             var entries = Directory.EnumerateFileSystemEntries(folder.Path, "*", SearchOption.TopDirectoryOnly);
             foreach (var entry in entries)
             {
-                if (entry.EndsWith(".meta")) continue;
+                if (IsIgnoredPath(entry)) continue;
 
                 bool isBranch = Directory.Exists(entry);
                 var name = Path.GetFileName(entry);
@@ -234,5 +307,25 @@ internal class AssetsBrowserViewModel : EditorPanelBase
                 m_AssetsItems.Add(node);
             }
         }
+    }
+
+    private bool IsIgnoredPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return true;
+        if (path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var name = Path.GetFileName(path);
+        if (name.StartsWith(".")) return true;
+
+        // AssetsBrowser is usually top-level only, but let's be safe.
+        // Also check OS attributes.
+        try 
+        {
+            var attr = File.GetAttributes(path);
+            if ((attr & FileAttributes.Hidden) != 0 || (attr & FileAttributes.System) != 0) return true;
+        }
+        catch { }
+
+        return false;
     }
 }

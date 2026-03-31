@@ -17,19 +17,33 @@ internal class FileTreeNode : TreeNodeBase
 {
     private string? m_UndoName;
     private bool m_IsLoaded = false;
+    public bool IsVirtual { get; set; } = false;
     public Guid AssetGuid { get; set; }
 
     public ObservableCollection<FileTreeNode> Folders { get; } = new();
 
-    internal FileTreeNode(string name, string path, bool isBranch, bool isRoot = false, bool isImmutable = false) : base(name, path, isBranch, isRoot, isImmutable)
+    internal FileTreeNode(string name, string path, bool isBranch, bool isRoot = false, bool isImmutable = false, bool isVirtual = false) : base(name, path, isBranch, isRoot, isImmutable)
     {
+        IsVirtual = isVirtual;
         if (isBranch)
         {
-            Size = ArisenEngine.FileSystem.FileSystemUtilities.GetFolderSize(path);
-            Modified = new DirectoryInfo(path).LastWriteTimeUtc;
+            if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+            {
+                Size = ArisenEngine.FileSystem.FileSystemUtilities.GetFolderSize(path);
+                Modified = new DirectoryInfo(path).LastWriteTimeUtc;
+            }
+            else
+            {
+                Size = 0;
+                Modified = DateTimeOffset.MinValue;
+            }
+
             if (isRoot)
             {
+                // Explicitly trigger LoadChildren instead of relying on the setter 
+                // because the base constructor bypasses the property setter.
                 LoadChildren();
+                m_IsExpanded = true;
             }
         }
         else
@@ -50,7 +64,13 @@ internal class FileTreeNode : TreeNodeBase
 
     private void LoadChildren()
     {
-        if (!IsBranch || m_IsLoaded) return;
+        if (!IsBranch || (m_IsLoaded && !IsVirtual)) 
+        {
+            if (IsVirtual) EditorLog.Log($"[FileTreeNode] Skipping LoadChildren for Virtual node: {Name}");
+            return;
+        }
+        
+        EditorLog.Log($"[FileTreeNode] Loading children for: {Path}");
         
         Children.Clear();
         Folders.Clear();
@@ -63,21 +83,32 @@ internal class FileTreeNode : TreeNodeBase
 
         try
         {
-            if (Directory.Exists(Path))
+            if (!string.IsNullOrEmpty(Path) && Directory.Exists(Path))
             {
+                int folderCount = 0;
                 foreach (var fullPath in Directory.EnumerateDirectories(Path, "*", options))
                 {
-                    var name = fullPath.Split(System.IO.Path.DirectorySeparatorChar)[^1];
-                    // Create the child node and trigger its own dummy-child logic
-                    var childNode = new FileTreeNode(name, fullPath, true, false) { Parent = this };
+                    var name = fullPath.Split(System.IO.Path.DirectorySeparatorChar).LastOrDefault() ?? "folder";
+                    if (IsIgnoredPath(fullPath)) continue;
+                    
+                    var childNode = new FileTreeNode(name, fullPath, true, false, Immutable) { Parent = this };
                     Children.Add(childNode);
                     Folders.Add(childNode);
+                    folderCount++;
                 }
+                EditorLog.Log($"[FileTreeNode] Found {folderCount} folders in {Path}");
+                m_IsLoaded = true;
+            }
+            else
+            {
+                EditorLog.Warning($"[FileTreeNode] Directory does not exist or path is empty: '{Path}'");
+                m_IsLoaded = true; // Still set to true to prevent infinite retry loops in UI
             }
         }
         catch (Exception ex)
         {
-             EditorLog.Error($"Failed to load children for {Path}: {ex.Message}");
+             EditorLog.Error($"[FileTreeNode] Failed to load children for {Path}: {ex.Message}");
+             // m_IsLoaded = false; // Allow retry on failure
         }
         
         var watcher = ArisenEditorFramework.Utilities.ArisenFileSystemWatcher.Current;
@@ -88,8 +119,6 @@ internal class FileTreeNode : TreeNodeBase
             watcher.Deleted += OnDeleted;
             watcher.Renamed += OnRenamed;
         }
-
-        m_IsLoaded = true;
     }
 
     public override bool HasChildren => IsBranch;
@@ -142,7 +171,7 @@ internal class FileTreeNode : TreeNodeBase
     private void OnCreated(object sender, FileSystemEventArgs e)
     {
         bool isBranch = File.GetAttributes(e.FullPath).HasFlag(FileAttributes.Directory);
-        if (!isBranch)
+        if (!isBranch || IsIgnoredPath(e.FullPath))
         {
             return;
         }
@@ -155,7 +184,8 @@ internal class FileTreeNode : TreeNodeBase
                 name,
                 e.FullPath,
                 true,
-                false) { Parent = this };
+                false,
+                Immutable) { Parent = this };
             Children.Add(node);
             Folders.Add(node);
         }
@@ -194,6 +224,19 @@ internal class FileTreeNode : TreeNodeBase
         }
     }
     
+    private bool IsIgnoredPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return true;
+        if (path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var name = System.IO.Path.GetFileName(path);
+        if (name.StartsWith(".")) return true;
+
+        // Note: For UI we usually don't need to check parents because 
+        // if a parent was ignored, this shouldn't be visible anyway.
+        return false;
+    }
+
     protected override void OnBeginEdit()
     {
         m_UndoName = Name;
