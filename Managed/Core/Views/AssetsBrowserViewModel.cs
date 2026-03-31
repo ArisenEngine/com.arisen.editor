@@ -163,7 +163,6 @@ internal class AssetsBrowserViewModel : EditorPanelBase
         if (packageSubsystem != null)
         {
             var packages = packageSubsystem.GetAllPackages().ToList();
-            ArisenEngine.Core.Diagnostics.Logger.Error($"[AssetsBrowserViewModel] PANIC DISCOVERY: Found {packages.Count} packages in the subsystem.");
             EditorLog.Log($"[AssetsBrowserViewModel] Discovered {packages.Count} packages.");
             foreach (var package in packages)
             {

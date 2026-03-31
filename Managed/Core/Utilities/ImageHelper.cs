@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
+using ArisenEditor.Core.Services;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
@@ -31,7 +32,7 @@ namespace ArisenEditor.Utilities
             }
             catch (HttpRequestException ex)
             {
-                Console.WriteLine($"An error occurred while downloading image '{url}' : {ex.Message}");
+                EditorLog.Error($"An error occurred while downloading image '{url}' : {ex.Message}");
                 return null;
             }
         }
