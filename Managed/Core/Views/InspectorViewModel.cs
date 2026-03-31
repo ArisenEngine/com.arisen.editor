@@ -39,57 +39,38 @@ public unsafe class ECSFieldPropertyViewModel : PropertyItemViewModel
             var ptr = _pool.GetAddress(_entity);
             if (ptr == IntPtr.Zero) return;
 
-            byte* basePtr = (byte*)ptr;
-            byte* targetPtr = basePtr + _fieldOffset;
+            object oldComponent = _pool.GetBoxed(_entity);
+            object newComponent = _pool.GetBoxed(_entity);
 
-            // Use specialized Unsafe writes for common primitive types to avoid ANY boxing.
-            bool written = WriteValueZeroBoxing(targetPtr, value);
+            object? converted = TryConvert(value, PropertyType);
             
-            if (written)
+            if (converted is string strValue)
             {
-                this.RaisePropertyChanged(nameof(Value));
+                if (PropertyType == typeof(System.Numerics.Vector3))
+                {
+                    converted = TryParseVector3(strValue);
+                    if (converted == null) return;
+                }
+                else if (PropertyType == typeof(System.Numerics.Quaternion))
+                {
+                    converted = TryParseQuaternion(strValue);
+                    if (converted == null) return;
+                }
             }
+            
+            if (converted == null && value != null) return;
+
+            _fieldInfo?.SetValue(newComponent, converted);
+
+            var cmdMgr = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ArisenEngine.Core.Automation.ICommandManager>();
+            var cmd = new ArisenEditor.Core.Commands.ModifyComponentCommand(_entity, _pool, oldComponent, newComponent);
+            cmdMgr?.Execute(cmd);
+            
+            this.RaisePropertyChanged(nameof(Value));
         }
     }
 
     private readonly FieldInfo? _fieldInfo;
-
-    private bool WriteValueZeroBoxing(byte* target, object? value)
-    {
-        if (value == null) return false;
-
-        object? converted = TryConvert(value, PropertyType);
-        
-        // Handle Vector3 and Quaternion strings coming from Avalonia bindings
-        if (converted is string strValue)
-        {
-            if (PropertyType == typeof(System.Numerics.Vector3))
-            {
-                converted = TryParseVector3(strValue);
-                if (converted == null) return false; // Parse failed
-            }
-            else if (PropertyType == typeof(System.Numerics.Quaternion))
-            {
-                converted = TryParseQuaternion(strValue);
-                if (converted == null) return false; // Parse failed
-            }
-        }
-        
-        if (converted == null) return false;
-
-        // Use Unsafe to write directly to the component memory
-        if (PropertyType == typeof(float)) { Unsafe.Write(target, (float)converted); return true; }
-        if (PropertyType == typeof(int)) { Unsafe.Write(target, (int)converted); return true; }
-        if (PropertyType == typeof(bool)) { Unsafe.Write(target, (bool)converted); return true; }
-        if (PropertyType == typeof(double)) { Unsafe.Write(target, (double)converted); return true; }
-        
-        // Fallback for custom structs/complex types: Boxed write (less ideal but keeps it generic)
-        // In a true production engine, we would generate IL or use a switch for all math types (Vector3, etc.)
-        var component = _pool.GetBoxed(_entity);
-        _fieldInfo?.SetValue(component, converted);
-        _pool.SetBoxed(_entity, component);
-        return true;
-    }
 
     public ECSFieldPropertyViewModel(Entity entity, IComponentPool pool, FieldInfo fieldInfo) 
         : base(pool.GetBoxed(entity), fieldInfo.Name, fieldInfo.FieldType, false, pool.GetComponentType().Name)
@@ -178,11 +159,11 @@ public class ECSPropertyViewModel : PropertyItemViewModel
             var ptr = _pool.GetAddress(_entity);
             if (ptr == IntPtr.Zero) return;
 
-            var component = _pool.GetBoxed(_entity);
+            object oldComponent = _pool.GetBoxed(_entity);
+            object newComponent = _pool.GetBoxed(_entity);
 
             object? converted = TryConvert(value, PropertyType);
             
-            // Handle Vector3 and Quaternion strings coming from Avalonia bindings
             if (converted is string strValue)
             {
                 if (PropertyType == typeof(System.Numerics.Vector3))
@@ -197,8 +178,13 @@ public class ECSPropertyViewModel : PropertyItemViewModel
                 }
             }
             
-            _propInfo.SetValue(component, converted);
-            _pool.SetBoxed(_entity, component);
+            if (converted == null && value != null) return;
+
+            _propInfo.SetValue(newComponent, converted);
+            
+            var cmdMgr = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ArisenEngine.Core.Automation.ICommandManager>();
+            var cmd = new ArisenEditor.Core.Commands.ModifyComponentCommand(_entity, _pool, oldComponent, newComponent);
+            cmdMgr?.Execute(cmd);
             
             this.RaisePropertyChanged(nameof(Value));
         }
