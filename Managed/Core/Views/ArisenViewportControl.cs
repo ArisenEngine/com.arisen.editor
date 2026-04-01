@@ -12,7 +12,7 @@ namespace ArisenEditor.Views;
 /// A custom Avalonia control that hosts the Arisen RenderGraph output.
 /// This solves the "Airspace Problem" by using Texture Sharing.
 /// </summary>
-public class ArisenViewportControl : Control
+public partial class ArisenViewportControl : Control
 {
     private bool m_IsRegistered = false;
     private RenderSubsystem? m_RenderSubsystem;
@@ -22,14 +22,14 @@ public class ArisenViewportControl : Control
         base.OnAttachedToVisualTree(e);
         
         // Resolve RenderSubsystem from Engine Kernel
-        m_RenderSubsystem = ArisenKernel.Lifecycle.EngineBootstrapper.Instance?.GetService<RenderSubsystem>();
+        m_RenderSubsystem = EngineKernel.Instance.Services.GetService<RenderSubsystem>();
         
         if (m_RenderSubsystem != null)
         {
-            // Register this control as a "Shared Texture" surface
+            // Register this control as a "Scene View" surface
             // We'll use the platform handle (IntPtr) as the unique identifier
-            IntPtr hostHandle = this.Handle.Handle; // This is conceptual, Avalonia handles vary by platform
-            m_RenderSubsystem.RegisterSurface(hostHandle, "EditorViewport", SurfaceType.SharedTexture, (int)Bounds.Width, (int)Bounds.Height);
+            IntPtr hostHandle = this.Handle.Handle; 
+            m_RenderSubsystem.RegisterSurface(hostHandle, "EditorViewport", SurfaceType.SceneView, (int)Bounds.Width, (int)Bounds.Height);
             m_IsRegistered = true;
         }
     }
@@ -67,7 +67,7 @@ internal class ControlHandle
 {
     public IntPtr Handle { get; set; }
 }
-internal partial class ArisenViewportControl
+public partial class ArisenViewportControl
 {
     internal ControlHandle Handle { get; } = new ControlHandle() { Handle = new IntPtr(1001) }; // GUID-lite for testing
 }
