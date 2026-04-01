@@ -9,8 +9,6 @@ namespace ArisenEditor.Views;
 
 public partial class EditorViewportView : UserControl
 {
-    private Image _viewportImage;
-
     public EditorViewportView()
     {
         InitializeComponent();
@@ -18,13 +16,6 @@ public partial class EditorViewportView : UserControl
 
     private void InitializeComponent()
     {
-        _viewportImage = new Image
-        {
-            Stretch = Stretch.Fill,
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
-        };
-
-        Content = _viewportImage;
+        Content = new ArisenViewportControl();
     }
 }
