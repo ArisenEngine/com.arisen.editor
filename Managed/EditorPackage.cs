@@ -7,6 +7,7 @@ using ArisenEditorFramework.Services;
 using ArisenKernel.Diagnostics;
 using Avalonia;
 using Avalonia.ReactiveUI;
+using ArisenEngine.Rendering;
 
 namespace ArisenEditor;
 
@@ -17,6 +18,15 @@ public class EditorPackage : IPackageEntry, IApplicationHost
         EditorLog.Initialize(new EditorLogService("editor.log"));
         EditorLog.Info("[EditorPackage] Registering Arisen Editor Avalonia Host.");
         registry.RegisterService<IApplicationHost>(this);
+
+        // Register the virtual surface for the Editor
+        // We use the dummy host ID 1001 which RenderSurface recognizes as a virtual target.
+        var renderSubsystem = EngineKernel.Instance.GetSubsystem<ArisenEngine.Rendering.RenderSubsystem>();
+        if (renderSubsystem != null)
+        {
+            renderSubsystem.RegisterSurface((IntPtr)1001, "EditorViewport", SurfaceType.GameView, 1280, 720);
+            EditorLog.Info("[EditorPackage] Registered virtual EditorViewport surface mapping to ID 0xFFFFFFFF.");
+        }
     }
 
     public void OnUnload(IServiceRegistry registry)
