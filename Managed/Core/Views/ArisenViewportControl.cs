@@ -28,6 +28,11 @@ public partial class ArisenViewportControl : Control
     private CompositionDrawingSurface? m_CompositionSurface;
     private ICompositionGpuInterop? m_Interop;
     private bool m_IsUpdating = false;
+    private DispatcherTimer? m_ResizeTimer;
+    private PixelSize m_PendingResizeSize;
+    private bool m_IsContextLost = false;
+    private IntPtr m_LastSharedHandle = IntPtr.Zero;
+    private ICompositionImportedGpuImage? m_LastImportedImage;
 
     private PixelSize GetPhysicalPixelSize()
     {
@@ -79,6 +84,7 @@ public partial class ArisenViewportControl : Control
             
             ElementComposition.SetElementChildVisual(this, surfaceVisual);
             
+            m_IsContextLost = false;
             EditorLog.Info("[ArisenViewportControl] Composition background established.");
 
             // Trigger visual update once interop is ready
@@ -92,17 +98,38 @@ public partial class ArisenViewportControl : Control
 
     private void UpdateSurfaceSize()
     {
-        var size = GetPhysicalPixelSize();
-        if (m_IsRegistered && m_RenderSubsystem != null)
+        m_PendingResizeSize = GetPhysicalPixelSize();
+        
+        if (m_ResizeTimer == null)
         {
-            m_RenderSubsystem.ResizeSurface(this.Handle.Handle, size.Width, size.Height);
+            m_ResizeTimer = new DispatcherTimer(
+                TimeSpan.FromMilliseconds(100), 
+                DispatcherPriority.Normal, 
+                (s, e) => {
+                    m_ResizeTimer?.Stop();
+                    ApplyPendingResize();
+                });
+        }
+        else
+        {
+            m_ResizeTimer.Stop();
+            m_ResizeTimer.Start();
         }
 
-        // Update visual size (logical pixels for Avalonia Visual)
+        // Update visual size immediately (logical pixels for Avalonia positioning)
         var visual = ElementComposition.GetElementChildVisual(this);
         if (visual != null)
         {
             visual.Size = new Avalonia.Vector((float)Bounds.Width, (float)Bounds.Height);
+        }
+    }
+
+    private void ApplyPendingResize()
+    {
+        if (m_IsRegistered && m_RenderSubsystem != null)
+        {
+            EditorLog.Info($"[ArisenViewportControl] Applying debounced resize: {m_PendingResizeSize.Width}x{m_PendingResizeSize.Height}");
+            m_RenderSubsystem.ResizeSurface(this.Handle.Handle, m_PendingResizeSize.Width, m_PendingResizeSize.Height);
         }
     }
 
@@ -124,6 +151,13 @@ public partial class ArisenViewportControl : Control
     public override void Render(DrawingContext context)
     {
         base.Render(context);
+
+        if (m_IsContextLost)
+        {
+            _ = InitializeCompositionAsync();
+            DrawPlaceholder(context);
+            return;
+        }
 
         if (m_CompositionSurface == null || m_Interop == null || m_RenderSubsystem == null)
         {
@@ -162,24 +196,33 @@ public partial class ArisenViewportControl : Control
         {
             var pixelSize = GetPhysicalPixelSize();
             
-            // Import the D3D11 shared texture into Avalonia
-            var importedImage = m_Interop.ImportImage(
-                new Avalonia.Platform.PlatformHandle(sharedHandle, Avalonia.Platform.KnownPlatformGraphicsExternalImageHandleTypes.D3D11TextureGlobalSharedHandle),
-                new Avalonia.Platform.PlatformGraphicsExternalImageProperties
-                {
-                    Width = pixelSize.Width,
-                    Height = pixelSize.Height,
-                    Format = Avalonia.Platform.PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm
-                });
+            // Only re-import if the handle or size has changed
+            if (sharedHandle != m_LastSharedHandle || m_LastImportedImage == null)
+            {
+                (m_LastImportedImage as IDisposable)?.Dispose();
+                m_LastImportedImage = m_Interop.ImportImage(
+                    new Avalonia.Platform.PlatformHandle(sharedHandle, Avalonia.Platform.KnownPlatformGraphicsExternalImageHandleTypes.D3D11TextureGlobalSharedHandle),
+                    new Avalonia.Platform.PlatformGraphicsExternalImageProperties
+                    {
+                        Width = pixelSize.Width,
+                        Height = pixelSize.Height,
+                        Format = Avalonia.Platform.PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm
+                    });
+                m_LastSharedHandle = sharedHandle;
+            }
 
-            try 
+            if (m_LastImportedImage != null)
             {
-                await m_CompositionSurface.UpdateAsync(importedImage);
+                await m_CompositionSurface.UpdateAsync(m_LastImportedImage);
             }
-            finally 
-            {
-                (importedImage as IDisposable)?.Dispose();
-            }
+        }
+        catch (Avalonia.Platform.PlatformGraphicsContextLostException)
+        {
+            m_IsContextLost = true;
+            (m_LastImportedImage as IDisposable)?.Dispose();
+            m_LastImportedImage = null;
+            m_LastSharedHandle = IntPtr.Zero;
+            EditorLog.Warning("[ArisenViewportControl] Graphics context lost. Recovery triggered.");
         }
         catch (Exception ex)
         {
