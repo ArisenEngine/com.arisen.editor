@@ -31,6 +31,9 @@ public partial class ArisenViewportControl : Control
     private DispatcherTimer? m_ResizeTimer;
     private PixelSize m_PendingResizeSize;
     private bool m_IsContextLost = false;
+    private bool m_IsInitializing = false;
+    private bool m_IsRecoveryRequested = false;
+    private DateTime m_LastRecoveryTime = DateTime.MinValue;
     private IntPtr m_LastSharedHandle = IntPtr.Zero;
     private ICompositionImportedGpuImage? m_LastImportedImage;
 
@@ -62,8 +65,20 @@ public partial class ArisenViewportControl : Control
 
     private async Task InitializeCompositionAsync()
     {
+        if (m_IsInitializing) return;
+        m_IsInitializing = true;
+        m_LastRecoveryTime = DateTime.UtcNow;
+
         try 
         {
+            // Reset existing interop state to ensure a cold restart
+            // Force re-import by clearing cached state
+            (m_LastImportedImage as IDisposable)?.Dispose();
+            m_LastImportedImage = null;
+            m_LastSharedHandle = IntPtr.Zero;
+
+            m_CompositionSurface?.Dispose();
+
             var visual = ElementComposition.GetElementVisual(this);
             var compositor = visual?.Compositor;
             if (compositor == null) return;
@@ -75,6 +90,7 @@ public partial class ArisenViewportControl : Control
                 return;
             }
 
+            // Cleanup old surface if it exists
             m_CompositionSurface = compositor.CreateDrawingSurface();
             
             // Create a SurfaceVisual to host our drawing surface
@@ -82,9 +98,12 @@ public partial class ArisenViewportControl : Control
             surfaceVisual.Surface = m_CompositionSurface;
             surfaceVisual.Size = new Avalonia.Vector((float)Bounds.Width, (float)Bounds.Height);
             
+            // CRITICAL: This MUST NOT be called during a render pass.
+            // When called from OnAttachedToVisualTree or via TriggerRecovery (Dispatcher.Post), it is safe.
             ElementComposition.SetElementChildVisual(this, surfaceVisual);
             
             m_IsContextLost = false;
+            m_IsRecoveryRequested = false;
             EditorLog.Info("[ArisenViewportControl] Composition background established.");
 
             // Trigger visual update once interop is ready
@@ -94,6 +113,40 @@ public partial class ArisenViewportControl : Control
         {
             EditorLog.Error($"[ArisenViewportControl] Composition initialization failed: {ex.Message}");
         }
+        finally
+        {
+            m_IsInitializing = false;
+        }
+    }
+
+    private void TriggerRecovery()
+    {
+        if (m_IsInitializing) return;
+        
+        // Cooldown: Only attempt recovery every 1000ms to prevent flickering loops
+        var timeSinceLastRecovery = (DateTime.UtcNow - m_LastRecoveryTime).TotalMilliseconds;
+        if (timeSinceLastRecovery < 1000)
+        {
+            if (!m_IsRecoveryRequested)
+            {
+                 m_IsRecoveryRequested = true;
+                 EditorLog.Warning($"[ArisenViewportControl] Context lost. Recovery throttled: {1000 - (int)timeSinceLastRecovery}ms remaining.");
+                 
+                 // Schedule a retry after the cooldown period
+                 Dispatcher.UIThread.Post(async () => {
+                     await Task.Delay(1000);
+                     m_IsRecoveryRequested = false;
+                     TriggerRecovery();
+                 }, DispatcherPriority.Background);
+            }
+            return;
+        }
+
+        m_IsRecoveryRequested = true;
+        m_LastImportedImage = null;
+        m_LastSharedHandle = IntPtr.Zero;
+        EditorLog.Warning("[ArisenViewportControl] Scheduling composition recovery...");
+        Dispatcher.UIThread.Post(() => _ = InitializeCompositionAsync(), DispatcherPriority.Background);
     }
 
     private void UpdateSurfaceSize()
@@ -151,31 +204,35 @@ public partial class ArisenViewportControl : Control
     public override void Render(DrawingContext context)
     {
         base.Render(context);
-
-        if (m_IsContextLost)
-        {
-            _ = InitializeCompositionAsync();
-            DrawPlaceholder(context);
-            return;
-        }
-
-        if (m_CompositionSurface == null || m_Interop == null || m_RenderSubsystem == null)
-        {
-            DrawPlaceholder(context);
-            return;
-        }
-
-        IntPtr sharedHandle = m_RenderSubsystem.GetSurfaceSharedHandle(this.Handle.Handle);
-        if (sharedHandle == IntPtr.Zero)
-        {
-            DrawPlaceholder(context);
-            return;
-        }
-
-        UpdateCompositionSurface(sharedHandle);
         
-        // Trigger next frame repaint
-        Dispatcher.UIThread.Post(InvalidateVisual, DispatcherPriority.Render);
+        if (m_RenderSubsystem == null)
+        {
+            DrawPlaceholder(context);
+            return;
+        }
+
+        ulong ticket = m_RenderSubsystem.GetLastRenderTicket(this.Handle.Handle);
+        uint frameIndex = m_RenderSubsystem.GetLastRenderFrameIndex(this.Handle.Handle);
+        IntPtr sharedHandle = m_RenderSubsystem.GetSurfaceSharedHandle(this.Handle.Handle, frameIndex);
+        
+        if (sharedHandle == IntPtr.Zero || ticket == 0)
+        {
+            DrawPlaceholder(context);
+            
+            if (m_IsContextLost)
+            {
+                TriggerRecovery();
+            }
+            return;
+        }
+
+        UpdateCompositionSurface(sharedHandle, ticket, frameIndex);
+        
+        // Trigger next frame repaint only if we are stable
+        if (!m_IsContextLost)
+        {
+            Dispatcher.UIThread.Post(InvalidateVisual, DispatcherPriority.Render);
+        }
     }
 
     private void DrawPlaceholder(DrawingContext context)
@@ -187,28 +244,36 @@ public partial class ArisenViewportControl : Control
         context.DrawText(text, new Point(Bounds.Width / 2 - text.Width / 2, Bounds.Height / 2 - text.Height / 2));
     }
 
-    private async void UpdateCompositionSurface(IntPtr sharedHandle)
+    private async void UpdateCompositionSurface(IntPtr sharedHandle, ulong ticket, uint frameIndex)
     {
-        if (m_Interop == null || m_CompositionSurface == null || m_IsUpdating) return;
+        if (m_Interop == null || m_CompositionSurface == null || m_IsUpdating || m_RenderSubsystem == null || ticket == 0) return;
 
         m_IsUpdating = true;
+        var pixelSize = GetPhysicalPixelSize();
         try 
         {
-            var pixelSize = GetPhysicalPixelSize();
-            
+            // ASYNC WAIT: Ensure the Engine's GPU work is finished before Avalonia attempts to import/use the texture.
+            // This prevents race conditions that lead to PlatformGraphicsContextLostException.
+            await m_RenderSubsystem.WaitForRenderTicketAsync(this.Handle.Handle, ticket);
+
+            // RE-FETCH: In case a resize or recovery happened while we were waiting, 
+            // the handle passed from the Render() thread might now be stale.
+            IntPtr currentHandle = m_RenderSubsystem.GetSurfaceSharedHandle(this.Handle.Handle, frameIndex);
+            if (currentHandle == IntPtr.Zero) return;
+
             // Only re-import if the handle or size has changed
-            if (sharedHandle != m_LastSharedHandle || m_LastImportedImage == null)
+            if (currentHandle != m_LastSharedHandle || m_LastImportedImage == null)
             {
                 (m_LastImportedImage as IDisposable)?.Dispose();
                 m_LastImportedImage = m_Interop.ImportImage(
-                    new Avalonia.Platform.PlatformHandle(sharedHandle, Avalonia.Platform.KnownPlatformGraphicsExternalImageHandleTypes.D3D11TextureGlobalSharedHandle),
+                    new Avalonia.Platform.PlatformHandle(currentHandle, Avalonia.Platform.KnownPlatformGraphicsExternalImageHandleTypes.D3D11TextureGlobalSharedHandle),
                     new Avalonia.Platform.PlatformGraphicsExternalImageProperties
                     {
                         Width = pixelSize.Width,
                         Height = pixelSize.Height,
                         Format = Avalonia.Platform.PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm
                     });
-                m_LastSharedHandle = sharedHandle;
+                m_LastSharedHandle = currentHandle;
             }
 
             if (m_LastImportedImage != null)
@@ -222,7 +287,9 @@ public partial class ArisenViewportControl : Control
             (m_LastImportedImage as IDisposable)?.Dispose();
             m_LastImportedImage = null;
             m_LastSharedHandle = IntPtr.Zero;
-            EditorLog.Warning("[ArisenViewportControl] Graphics context lost. Recovery triggered.");
+            
+            EditorLog.Warning($"[ArisenViewportControl] Graphics context lost at size {pixelSize.Width}x{pixelSize.Height} for handle 0x{sharedHandle.ToString("X")} (Frame {frameIndex}, Ticket {ticket}). Recovery initiated.");
+            TriggerRecovery();
         }
         catch (Exception ex)
         {
@@ -242,5 +309,6 @@ internal class ControlHandle
 }
 public partial class ArisenViewportControl
 {
-    internal ControlHandle Handle { get; } = new ControlHandle() { Handle = new IntPtr(1001) }; // GUID-lite for testing
+    private static int s_NextViewportId = 10000;
+    internal ControlHandle Handle { get; } = new ControlHandle() { Handle = new IntPtr(System.Threading.Interlocked.Increment(ref s_NextViewportId)) };
 }
