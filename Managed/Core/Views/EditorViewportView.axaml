@@ -7,10 +7,12 @@
              x:Class="ArisenEditor.Views.EditorViewportView"
              x:DataType="viewModels:EditorViewportViewModel">
     
-    <Grid Background="Black">
-        <Image Source="{Binding ViewportImage}" Stretch="Fill"/>
+    <Grid>
+        <ContentControl x:Name="ViewportContainer" Background="Black" />
         
-        <!-- Future additions: Gizmo overlays, UI overlays go here! -->
-        <!-- Because this is an Image, we don't have airspace clipping issues. -->
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Top" HorizontalAlignment="Right" Margin="10">
+            <Button Content="Capture Frame (RenderDoc)" Click="OnCaptureClick" 
+                    Background="#444" Foreground="White" Opacity="0.8" Padding="10,5"/>
+        </StackPanel>
     </Grid>
 </UserControl>

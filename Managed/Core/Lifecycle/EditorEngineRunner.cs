@@ -31,7 +31,7 @@ public class EditorEngineRunner : IDisposable
         m_EngineThread = new Thread(EngineLoop)
         {
             Name = "Arisen_Engine_MainThread",
-            IsBackground = true, // Ensure it closes when Editor closes
+            IsBackground = false, // Changed to false to ensure graceful cleanup before process exit
             Priority = ThreadPriority.AboveNormal
         };
 
@@ -42,8 +42,9 @@ public class EditorEngineRunner : IDisposable
     {
         if (!IsRunning) return;
 
+        EditorLog.Log("[EditorEngineRunner] Stop requested. Waiting for engine thread to exit...");
         m_CancellationTokenSource.Cancel();
-        m_EngineThread.Join(2000); // Wait up to 2 seconds for graceful exit
+        m_EngineThread.Join(5000); // Wait up to 5 seconds for graceful exit (Vulkan/TaskGraph teardown)
         
         m_CancellationTokenSource.Dispose();
         m_CancellationTokenSource = null;
@@ -86,6 +87,14 @@ public class EditorEngineRunner : IDisposable
                     }
                 }
             }
+        }
+
+        // CRITICAL: Trigger engine kernel shutdown once the loop exits.
+        // This ensures all subsystems (RHI, TaskGraph, ECS) perform their cleanup.
+        if (EngineKernel.IsCreated)
+        {
+            EditorLog.Log("[EditorEngineRunner] Shutting down Engine Kernel...");
+            EngineKernel.Instance.Shutdown();
         }
 
         m_Stopwatch.Stop();

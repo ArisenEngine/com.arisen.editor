@@ -1,6 +1,7 @@
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using ReactiveUI;
+using ArisenEngine.Rendering;
 
 namespace ArisenEditor.ViewModels;
 
@@ -19,6 +20,18 @@ public class EditorViewportViewModel : ReactiveObject
     }
     
     public bool IsSceneView { get; }
+
+    private Color _clearColor = Color.FromRgb(255, 102, 178); // Pink
+    public Color ClearColor
+    {
+        get => _clearColor;
+        set => this.RaiseAndSetIfChanged(ref _clearColor, value);
+    }
+
+    public void Capture()
+    {
+        RenderDocService.Instance.TriggerCapture();
+    }
 
     public EditorViewportViewModel(bool isSceneView)
     {

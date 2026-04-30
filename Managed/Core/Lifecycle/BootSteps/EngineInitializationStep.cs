@@ -19,10 +19,29 @@ public class EngineInitializationStep : IBootStep
             
             // Sync project context to the core engine EnvironmentSubsystem
             var kernel = ArisenKernel.Lifecycle.EngineKernel.Instance;
-            var env = kernel.GetSubsystem<ArisenEngine.Core.Lifecycle.EnvironmentSubsystem>();
-            if (env != null)
+            
+            // B11: Skip initialization if the kernel is already Running or Initializing
+            // This prevents overwriting subsystems if the Host already started the engine.
+            if (kernel.CurrentPhase != ArisenKernel.Lifecycle.EnginePhase.None)
             {
-                env.SetProject(projectRoot, projectName);
+                ArisenKernel.Diagnostics.KernelLog.Info($"[EngineInitializationStep] Engine already in phase {kernel.CurrentPhase}. Skipping redundant initialization.");
+            }
+            else
+            {
+                var env = kernel.GetSubsystem<ArisenEngine.Core.Lifecycle.EnvironmentSubsystem>();
+                if (env != null)
+                {
+                    env.SetProject(projectRoot, projectName);
+
+                    // Initialize the kernel to trigger subsystem discovery and transition to Running phase.
+                    // This is required for ITickableSubsystems like RenderSubsystem to start working.
+                    kernel.Initialize(new ArisenKernel.Lifecycle.EngineConfig
+                    {
+                        ProjectRoot = projectRoot,
+                        ProjectName = projectName,
+                        AppName = "ArisenEditor"
+                    });
+                }
             }
         }
 
