@@ -8,6 +8,7 @@ using ArisenKernel.Diagnostics;
 using Avalonia;
 using Avalonia.ReactiveUI;
 using ArisenEngine.Rendering;
+using ArisenEngine.Core.Diagnostics;
 
 namespace ArisenEditor;
 
@@ -36,5 +37,8 @@ public class EditorPackage : IPackageEntry, IApplicationHost
             .LogToTrace()
             .UseReactiveUI()
             .StartWithClassicDesktopLifetime(args);
+
+        EditorLog.Info("[EditorPackage] UI Loop exited. Shutting down diagnostics...");
+        Logger.Dispose();
     }
 }

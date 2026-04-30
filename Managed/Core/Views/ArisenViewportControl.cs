@@ -22,6 +22,7 @@ namespace ArisenEditor.Views;
 public partial class ArisenViewportControl : Control
 {
     private bool m_IsRegistered = false;
+    private IntPtr m_LastRegisteredHandle = IntPtr.Zero;
     private RenderSubsystem? m_RenderSubsystem;
     
     // Composition members
@@ -36,6 +37,8 @@ public partial class ArisenViewportControl : Control
     private DateTime m_LastRecoveryTime = DateTime.MinValue;
     private IntPtr m_LastSharedHandle = IntPtr.Zero;
     private ICompositionImportedGpuImage? m_LastImportedImage;
+    private uint m_LastImportedWidth = 0;
+    private uint m_LastImportedHeight = 0;
 
     private PixelSize GetPhysicalPixelSize()
     {
@@ -47,12 +50,19 @@ public partial class ArisenViewportControl : Control
     {
         base.OnAttachedToVisualTree(e);
         
-        // Resolve RenderSubsystem from Engine Kernel
-        m_RenderSubsystem = EngineKernel.Instance.Services.GetService<RenderSubsystem>();
-        
+        // B11: Check if the RenderSubsystem has changed (e.g. via late initialization or service replacement)
+        // This ensures the UI doesn't get stuck on a disconnected instance if a better one was registered later.
+        var currentSubsystem = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<RenderSubsystem>();
+        if (currentSubsystem != null && currentSubsystem != m_RenderSubsystem)
+        {
+            KernelLog.Info($"[ArisenViewportControl] Detected Subsystem Change! (Old:{m_RenderSubsystem?.GetHashCode() ?? 0} -> New:{currentSubsystem.GetHashCode()}, PID:{System.Diagnostics.Process.GetCurrentProcess().Id}). Reconnecting...");
+            m_RenderSubsystem = currentSubsystem;
+        }
+
         if (m_RenderSubsystem != null)
         {
             var size = GetPhysicalPixelSize();
+            EditorLog.Info($"[ArisenViewportControl] Registering surface: {this.Handle.Handle} (0x{this.Handle.Handle:X}), Name: EditorViewport, Size: {size.Width}x{size.Height}, SubsystemHash: {m_RenderSubsystem.GetHashCode()}");
             m_RenderSubsystem.RegisterSurface(this.Handle.Handle, "EditorViewport", SurfaceType.SceneView, size.Width, size.Height);
             m_IsRegistered = true;
         }
@@ -76,6 +86,8 @@ public partial class ArisenViewportControl : Control
             (m_LastImportedImage as IDisposable)?.Dispose();
             m_LastImportedImage = null;
             m_LastSharedHandle = IntPtr.Zero;
+            m_LastImportedWidth = 0;
+            m_LastImportedHeight = 0;
 
             m_CompositionSurface?.Dispose();
 
@@ -145,6 +157,8 @@ public partial class ArisenViewportControl : Control
         m_IsRecoveryRequested = true;
         m_LastImportedImage = null;
         m_LastSharedHandle = IntPtr.Zero;
+        m_LastImportedWidth = 0;
+        m_LastImportedHeight = 0;
         EditorLog.Warning("[ArisenViewportControl] Scheduling composition recovery...");
         Dispatcher.UIThread.Post(() => _ = InitializeCompositionAsync(), DispatcherPriority.Background);
     }
@@ -204,11 +218,28 @@ public partial class ArisenViewportControl : Control
     public override void Render(DrawingContext context)
     {
         base.Render(context);
-        
+
+        // B11: Resolve the RenderSubsystem once during attachment or if it changes
+        if (m_RenderSubsystem == null)
+        {
+            m_RenderSubsystem = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<RenderSubsystem>();
+        }
+
         if (m_RenderSubsystem == null)
         {
             DrawPlaceholder(context);
             return;
+        }
+
+        // B11: Re-register only if the native handle actually changed or registration was lost
+        IntPtr currentHandle = this.Handle.Handle;
+        if (!m_IsRegistered || m_LastRegisteredHandle != currentHandle)
+        {
+            var size = GetPhysicalPixelSize();
+            
+            m_RenderSubsystem.RegisterSurface(currentHandle, "EditorViewport", SurfaceType.SceneView, (int)size.Width, (int)size.Height);
+            m_IsRegistered = true;
+            m_LastRegisteredHandle = currentHandle;
         }
 
         ulong ticket = m_RenderSubsystem.GetLastRenderTicket(this.Handle.Handle);
@@ -219,20 +250,15 @@ public partial class ArisenViewportControl : Control
         {
             DrawPlaceholder(context);
             
-            if (m_IsContextLost)
-            {
-                TriggerRecovery();
-            }
+            // Polling: If the engine hasn't produced the first frame yet, we must continue redrawing.
+            Dispatcher.UIThread.Post(InvalidateVisual, DispatcherPriority.Render);
             return;
         }
 
         UpdateCompositionSurface(sharedHandle, ticket, frameIndex);
         
-        // Trigger next frame repaint only if we are stable
-        if (!m_IsContextLost)
-        {
-            Dispatcher.UIThread.Post(InvalidateVisual, DispatcherPriority.Render);
-        }
+        // Trigger next frame repaint
+        Dispatcher.UIThread.Post(InvalidateVisual, DispatcherPriority.Render);
     }
 
     private void DrawPlaceholder(DrawingContext context)
@@ -261,19 +287,42 @@ public partial class ArisenViewportControl : Control
             IntPtr currentHandle = m_RenderSubsystem.GetSurfaceSharedHandle(this.Handle.Handle, frameIndex);
             if (currentHandle == IntPtr.Zero) return;
 
-            // Only re-import if the handle or size has changed
-            if (currentHandle != m_LastSharedHandle || m_LastImportedImage == null)
+            // NEW: Fetch the actual dimensions the engine rendered at for this specific ticket.
+            // This ensures that Avalonia imports the texture with correct metadata,
+            // avoiding context loss during rapid resizing.
+            uint lastWidth = m_RenderSubsystem.GetLastRenderWidth(this.Handle.Handle);
+            uint lastHeight = m_RenderSubsystem.GetLastRenderHeight(this.Handle.Handle);
+
+            // Only re-import if the handle or reported engine size has changed
+            bool sizeChanged = m_LastImportedImage != null && 
+                               (m_LastImportedWidth != lastWidth || 
+                                m_LastImportedHeight != lastHeight);
+
+            if (currentHandle != m_LastSharedHandle || m_LastImportedImage == null || sizeChanged)
             {
                 (m_LastImportedImage as IDisposable)?.Dispose();
-                m_LastImportedImage = m_Interop.ImportImage(
-                    new Avalonia.Platform.PlatformHandle(currentHandle, Avalonia.Platform.KnownPlatformGraphicsExternalImageHandleTypes.D3D11TextureGlobalSharedHandle),
-                    new Avalonia.Platform.PlatformGraphicsExternalImageProperties
-                    {
-                        Width = pixelSize.Width,
-                        Height = pixelSize.Height,
-                        Format = Avalonia.Platform.PlatformGraphicsExternalImageFormat.B8G8R8A8UNorm
-                    });
+                
+                try {
+                    if (frameIndex % 60 == 0)
+                        EditorLog.Info($"[ArisenViewportControl] Importing Image: Handle 0x{currentHandle.ToInt64():X}, Size {lastWidth}x{lastHeight}, Type: VulkanOpaqueNtHandle");
+                    
+                    m_LastImportedImage = m_Interop.ImportImage(
+                        new Avalonia.Platform.PlatformHandle(currentHandle, Avalonia.Platform.KnownPlatformGraphicsExternalImageHandleTypes.VulkanOpaqueNtHandle),
+                        new Avalonia.Platform.PlatformGraphicsExternalImageProperties
+                        {
+                            Width = (int)lastWidth,
+                            Height = (int)lastHeight,
+                            Format = Avalonia.Platform.PlatformGraphicsExternalImageFormat.R8G8B8A8UNorm
+                        });
+                    EditorLog.Info($"[ArisenViewportControl] Import successful: {m_LastImportedImage != null}");
+                } catch(Exception ex) {
+                    EditorLog.Error($"[ArisenViewportControl] Import failed: {ex}");
+                    throw;
+                }
+
                 m_LastSharedHandle = currentHandle;
+                m_LastImportedWidth = lastWidth;
+                m_LastImportedHeight = lastHeight;
             }
 
             if (m_LastImportedImage != null)
@@ -287,6 +336,9 @@ public partial class ArisenViewportControl : Control
             (m_LastImportedImage as IDisposable)?.Dispose();
             m_LastImportedImage = null;
             m_LastSharedHandle = IntPtr.Zero;
+            m_LastImportedWidth = 0;
+            m_LastImportedHeight = 0;
+
             
             EditorLog.Warning($"[ArisenViewportControl] Graphics context lost at size {pixelSize.Width}x{pixelSize.Height} for handle 0x{sharedHandle.ToString("X")} (Frame {frameIndex}, Ticket {ticket}). Recovery initiated.");
             TriggerRecovery();
