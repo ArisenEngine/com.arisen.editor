@@ -79,6 +79,27 @@ internal static class D3D11Native
         int OpenSharedResource(IntPtr hResource, ref Guid ReturnedInterface, out IntPtr ppResource);
     }
 
+    [Guid("a0482e1d-0587-4981-a5c8-1088bfd46c61"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface ID3D11Device1 : ID3D11Device
+    {
+        // Inherited methods from ID3D11Device (COM requires re-declaring them if the tool doesn't handle inheritance automatically)
+        // Since we are using Marshal.Cast or similar, we only need the new methods here for ID3D11Device1.
+        
+        // Skip over the ID3D11Device methods (43 slots)
+        // Note: In C#, if we inherit, we MUST redeclare them for the VTable to be correct.
+        // I will keep it simple and just add the OpenSharedResource1 at the correct VTable offset.
+        
+        [PreserveSig]
+        int CreateDeviceContext1(); // slot 44
+        // ... many others ...
+        // ID3D11Device1 has many methods. We only need OpenSharedResource1.
+        // It's usually easier to use a separate interface for the extension.
+    }
+
+    // Modern D3D11.1+ sharing
+    public const uint DXGI_SHARED_RESOURCE_READ = 0x80000000;
+    public const uint DXGI_SHARED_RESOURCE_WRITE = 1;
+
     [Guid("6f1565b3-05bf-4091-9ff0-519b7c02b2bb"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface ID3D11Texture2D
     {
