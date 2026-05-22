@@ -1,0 +1,14 @@
+{
+  "entry": {
+    "assembly": "Com.Arisen.Editor.dll",
+    "class": "ArisenEditor.EditorPackage"
+  },
+  "services": {
+    "provides": [
+      {
+        "interface": "IApplicationHost",
+        "priority": 100
+      }
+    ]
+  }
+}
