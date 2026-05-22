@@ -2,6 +2,7 @@ using ArisenKernel.Packages;
 using ArisenKernel.Services;
 using ArisenKernel.Contracts;
 using System;
+using System.Runtime.InteropServices;
 using ArisenEditor.Core.Services;
 using ArisenEditorFramework.Services;
 using ArisenKernel.Diagnostics;
@@ -30,9 +31,29 @@ public class EditorPackage : IPackageEntry, IApplicationHost
     {
         EditorLog.Info("[EditorPackage] Taking over Main Thread for Avalonia UI Loop...");
         
-        // Emulate the original Program.cs startup logic
-        AppBuilder.Configure<App>()
-            .UsePlatformDetect() // Essential for desktop platform services
+        // The editor viewport consumes Vulkan external-memory images exported by the RHI.
+        // Avalonia's default Windows backend is ANGLE/D3D11, whose compositor only accepts
+        // D3D11 shared textures. In that mode the viewport can never import Arisen's
+        // VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32 images and remains black.
+        // Force Avalonia's Win32 compositor to Vulkan first so TryGetCompositionGpuInterop()
+        // exposes VulkanOpaqueNtHandle, matching the native Vulkan swapchain export.
+        var builder = AppBuilder.Configure<App>()
+            .UsePlatformDetect();
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            builder = builder.With(new Win32PlatformOptions
+            {
+                RenderingMode = new[]
+                {
+                    Win32RenderingMode.Vulkan,
+                    Win32RenderingMode.AngleEgl,
+                    Win32RenderingMode.Software
+                }
+            });
+        }
+
+        builder
             .WithInterFont()
             .LogToTrace()
             .UseReactiveUI()
