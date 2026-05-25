@@ -2,6 +2,7 @@
   "id": "com.arisen.editor",
   "name": "Arisen Editor",
   "version": "1.0.0",
+  "layer": "tooling",
   "author": "Arisen Team",
   "description": "The official Arisen Engine Editor visual authoring environment.",
   "entry": {
@@ -11,7 +12,7 @@
   "services": {
     "provides": [
       {
-        "interface": "IApplicationHost",
+        "interface": "ArisenKernel.Contracts.IApplicationHost",
         "priority": 100
       }
     ]
