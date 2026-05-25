@@ -6,7 +6,7 @@
   "services": {
     "provides": [
       {
-        "interface": "IApplicationHost",
+        "interface": "ArisenKernel.Contracts.IApplicationHost",
         "priority": 100
       }
     ]
