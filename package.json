@@ -15,6 +15,9 @@
         "interface": "ArisenKernel.Contracts.IApplicationHost",
         "priority": 100
       }
+    ],
+    "requires": [
+      "ArisenKernel.Contracts.IRHIBackend"
     ]
   },
   "dependencies": {
