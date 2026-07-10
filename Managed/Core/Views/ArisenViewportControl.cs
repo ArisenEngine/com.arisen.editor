@@ -28,16 +28,15 @@ public partial class ArisenViewportControl : Control
     private bool _isInitialized;
     private bool _isUpdating;
     private bool _updateQueued;
-    private ulong _lastPresentedTicket;
     private string? _handleType;
     private string? _semaphoreType;
     private CompositionGpuImportedImageSynchronizationCapabilities _syncCapabilities;
     private bool _syncCapabilitiesLogged;
-    private bool _unsupportedSyncLogged;
     private bool _firstImportLogged;
-    private uint _lastImportedWidth;
-    private uint _lastImportedHeight;
     private DateTime _lastRecoveryTime = DateTime.MinValue;
+    private DateTime _lastPresentationSkipLogTime = DateTime.MinValue;
+    private RenderOutputPresentationSkipReason _lastPresentationSkipReason;
+    private RenderOutputPresentationState _presentationState;
     
     private readonly Action _updateAction;
     private readonly Dictionary<IntPtr, ICompositionImportedGpuImage> _imageCache = new();
@@ -182,13 +181,12 @@ public partial class ArisenViewportControl : Control
         _interop = null;
         _handleType = null;
         _semaphoreType = null;
-        _lastPresentedTicket = 0;
-        _lastImportedWidth = 0;
-        _lastImportedHeight = 0;
+        _presentationState.Reset();
         _firstImportLogged = false;
         _syncCapabilities = default;
         _syncCapabilitiesLogged = false;
-        _unsupportedSyncLogged = false;
+        _lastPresentationSkipReason = RenderOutputPresentationSkipReason.None;
+        _lastPresentationSkipLogTime = DateTime.MinValue;
     }
 
     private void OnCompositionUpdate()
@@ -216,22 +214,47 @@ public partial class ArisenViewportControl : Control
         }
 
         var requiresSemaphores = (_syncCapabilities & CompositionGpuImportedImageSynchronizationCapabilities.Automatic) == 0;
+        var decision = _presentationState.Evaluate(info, requiresSemaphores);
 
         // Skip if nothing new or engine is still warming up
-        if (info.Ticket == 0 ||
-            info.Ticket == _lastPresentedTicket ||
-            info.SharedHandle == IntPtr.Zero ||
-            info.MemorySize == 0 ||
-            info.Width == 0 ||
-            info.Height == 0 ||
-            (requiresSemaphores && (info.WaitSemaphoreHandle == IntPtr.Zero || info.SignalSemaphoreHandle == IntPtr.Zero)))
+        if (!decision.ShouldPresent)
         {
-            ReleaseConsumedSemaphore(info.SignalSemaphoreHandle);
+            LogPresentationSkipIfUseful(info, decision.SkipReason);
+
+            if (decision.ShouldReleaseSignalSemaphore)
+            {
+                ReleaseConsumedSemaphore(info.SignalSemaphoreHandle);
+            }
+
             QueueNextFrame();
             return;
         }
 
         RenderFrameAsync(info);
+    }
+
+    private void LogPresentationSkipIfUseful(in RenderOutputInfo info, RenderOutputPresentationSkipReason reason)
+    {
+        if (reason is RenderOutputPresentationSkipReason.None or
+            RenderOutputPresentationSkipReason.WarmingUp or
+            RenderOutputPresentationSkipReason.DuplicateTicket)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        if (reason == _lastPresentationSkipReason &&
+            (now - _lastPresentationSkipLogTime).TotalSeconds < 1.0)
+        {
+            return;
+        }
+
+        _lastPresentationSkipReason = reason;
+        _lastPresentationSkipLogTime = now;
+        KernelLog.Warning($"[ArisenViewportControl] Skipped viewport output: reason={reason}, ticket={info.Ticket}, " +
+            $"frame={info.FrameIndex}, generation={info.ResizeGeneration}, size={info.Width}x{info.Height}, " +
+            $"handle=0x{info.SharedHandle.ToInt64():X}, memory={info.MemorySize}, " +
+            $"wait=0x{info.WaitSemaphoreHandle.ToInt64():X}, signal=0x{info.SignalSemaphoreHandle.ToInt64():X}");
     }
 
     private async void RenderFrameAsync(RenderOutputInfo info)
@@ -244,14 +267,16 @@ public partial class ArisenViewportControl : Control
             // This prevents race conditions where Avalonia reads an image Vulkan is still writing.
             await _renderSubsystem!.WaitForRenderTicketAsync(this.Handle.Handle, info.Ticket);
 
-            if (!_isInitialized || _interop == null || _surface == null) return;
+            var interop = _interop;
+            var surface = _surface;
+            if (!_isInitialized || interop == null || surface == null) return;
 
             // Handle Resize
-            if (info.Width != _lastImportedWidth || info.Height != _lastImportedHeight)
+            if (_presentationState.ShouldResetImportedImageCache(info))
             {
                 ClearImageCache();
-                _lastImportedWidth = info.Width;
-                _lastImportedHeight = info.Height;
+                KernelLog.Info($"[ArisenViewportControl] Viewport output resized: generation={info.ResizeGeneration}, size={info.Width}x{info.Height}");
+                _presentationState.MarkImportedImageCacheCurrent(info);
             }
 
             // Get or Import Image
@@ -270,7 +295,7 @@ public partial class ArisenViewportControl : Control
                     MemorySize = info.MemorySize
                 };
 
-                importedImage = _interop.ImportImage(handle, properties);
+                importedImage = interop.ImportImage(handle, properties);
                 lock (_imageCache)
                 {
                     _imageCache[info.SharedHandle] = importedImage;
@@ -280,31 +305,32 @@ public partial class ArisenViewportControl : Control
                 {
                     _firstImportLogged = true;
                     KernelLog.Info($"[ArisenViewportControl] First image imported: handle=0x{info.SharedHandle.ToInt64():X}, " +
-                        $"type={_handleType}, size={info.Width}x{info.Height}, memory={info.MemorySize}, format={properties.Format}");
+                        $"type={_handleType}, size={info.Width}x{info.Height}, generation={info.ResizeGeneration}, memory={info.MemorySize}, format={properties.Format}");
                 }
             }
 
-            if (!_syncCapabilitiesLogged && _interop != null && _handleType != null)
+            if (!_syncCapabilitiesLogged && _handleType != null)
             {
-                _syncCapabilities = _interop.GetSynchronizationCapabilities(_handleType);
+                _syncCapabilities = interop.GetSynchronizationCapabilities(_handleType);
                 _syncCapabilitiesLogged = true;
-                KernelLog.Info($"[ArisenViewportControl] Synchronization capabilities for {_handleType}: {_syncCapabilities}; semaphore types: [{string.Join(", ", _interop.SupportedSemaphoreTypes)}]");
+                KernelLog.Info($"[ArisenViewportControl] Synchronization capabilities for {_handleType}: {_syncCapabilities}; semaphore types: [{string.Join(", ", interop.SupportedSemaphoreTypes)}]");
             }
 
             if ((_syncCapabilities & CompositionGpuImportedImageSynchronizationCapabilities.Semaphores) != 0)
             {
-                if (_semaphoreType == null || info.WaitSemaphoreHandle == IntPtr.Zero || info.SignalSemaphoreHandle == IntPtr.Zero)
+                var semaphoreType = _semaphoreType;
+                if (semaphoreType == null || info.WaitSemaphoreHandle == IntPtr.Zero || info.SignalSemaphoreHandle == IntPtr.Zero)
                 {
                     KernelLog.Error($"[ArisenViewportControl] Missing explicit Vulkan semaphore sync for frame {info.FrameIndex}. " +
-                        $"wait=0x{info.WaitSemaphoreHandle.ToInt64():X}, signal=0x{info.SignalSemaphoreHandle.ToInt64():X}, type={_semaphoreType}");
+                        $"wait=0x{info.WaitSemaphoreHandle.ToInt64():X}, signal=0x{info.SignalSemaphoreHandle.ToInt64():X}, type={semaphoreType}");
                     return;
                 }
 
-                var waitSemaphore = _interop.ImportSemaphore(new PlatformHandle(info.WaitSemaphoreHandle, _semaphoreType));
-                var signalSemaphore = _interop.ImportSemaphore(new PlatformHandle(info.SignalSemaphoreHandle, _semaphoreType));
+                var waitSemaphore = interop.ImportSemaphore(new PlatformHandle(info.WaitSemaphoreHandle, semaphoreType));
+                var signalSemaphore = interop.ImportSemaphore(new PlatformHandle(info.SignalSemaphoreHandle, semaphoreType));
                 try
                 {
-                    await _surface.UpdateWithSemaphoresAsync(importedImage, waitSemaphore, signalSemaphore);
+                    await surface.UpdateWithSemaphoresAsync(importedImage, waitSemaphore, signalSemaphore);
                 }
                 finally
                 {
@@ -317,12 +343,12 @@ public partial class ArisenViewportControl : Control
             else
             {
                 // Push to Avalonia Compositor
-                await _surface.UpdateAsync(importedImage);
+                await surface.UpdateAsync(importedImage);
             }
 
             // Mark the ticket as presented only after Avalonia accepted the image. If import/update fails,
             // the next composition tick can retry the same valid engine frame instead of skipping it forever.
-            _lastPresentedTicket = info.Ticket;
+            _presentationState.MarkPresented(info);
 
             // Report consumption back to engine for back-pressure
             _renderSubsystem?.ReportConsumedFrameIndex(this.Handle.Handle, info.FrameIndex);
@@ -335,7 +361,7 @@ public partial class ArisenViewportControl : Control
         catch (Exception ex)
         {
             KernelLog.Error($"[ArisenViewportControl] Frame update failed: ticket={info.Ticket}, frame={info.FrameIndex}, " +
-                $"handle=0x{info.SharedHandle.ToInt64():X}, size={info.Width}x{info.Height}, memory={info.MemorySize}, type={_handleType}, " +
+                $"handle=0x{info.SharedHandle.ToInt64():X}, size={info.Width}x{info.Height}, generation={info.ResizeGeneration}, memory={info.MemorySize}, type={_handleType}, " +
                 $"wait=0x{info.WaitSemaphoreHandle.ToInt64():X}, signal=0x{info.SignalSemaphoreHandle.ToInt64():X}, sync={_syncCapabilities}, error={ex.Message}");
         }
         finally

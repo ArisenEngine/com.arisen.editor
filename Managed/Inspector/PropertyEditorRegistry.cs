@@ -23,6 +23,7 @@ public static class PropertyEditorRegistry
         RegisterEditor(new QuaternionPropertyEditor());
         RegisterEditor(new ColorPropertyEditor());
         RegisterEditor(new ObjectReferencePropertyEditor());
+        RegisterEditor(new ActionPropertyEditor());
     }
 
     public static void RegisterEditor(IPropertyEditor editor)

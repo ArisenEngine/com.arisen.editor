@@ -41,6 +41,8 @@ public class AssetDatabase : IDisposable
                 Guid TEXT PRIMARY KEY,
                 Path TEXT NOT NULL UNIQUE,
                 Type TEXT,
+                Importer TEXT,
+                PackageId TEXT,
                 LastModified INTEGER NOT NULL
             );
             
@@ -48,22 +50,57 @@ public class AssetDatabase : IDisposable
             CREATE INDEX IF NOT EXISTS idx_assets_path ON Assets(Path);
         ";
         command.ExecuteNonQuery();
+        EnsureColumn("Importer", "TEXT");
+        EnsureColumn("PackageId", "TEXT");
     }
 
     public void RegisterAsset(Guid guid, string path, string type, long lastModifiedTimeUtc)
     {
+        RegisterAsset(guid, path, type, string.Empty, string.Empty, lastModifiedTimeUtc);
+    }
+
+    public void RegisterAsset(
+        Guid guid,
+        string path,
+        string type,
+        string importer,
+        string packageId,
+        long lastModifiedTimeUtc)
+    {
+        if (guid == Guid.Empty)
+        {
+            throw new ArgumentException("Asset GUID cannot be empty.", nameof(guid));
+        }
+
+        var existingPath = GetPath(guid);
+        if (!string.IsNullOrWhiteSpace(existingPath) &&
+            !string.Equals(existingPath, path, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Duplicate asset GUID '{guid}' found at '{path}' and '{existingPath}'.");
+        }
+
+        if (TryGetGuid(path, out var existingGuid) && existingGuid != guid)
+        {
+            RemoveAsset(existingGuid);
+        }
+
         using var command = _connection.CreateCommand();
         command.CommandText = @"
-            INSERT INTO Assets (Guid, Path, Type, LastModified)
-            VALUES ($guid, $path, $type, $lastModified)
+            INSERT INTO Assets (Guid, Path, Type, Importer, PackageId, LastModified)
+            VALUES ($guid, $path, $type, $importer, $packageId, $lastModified)
             ON CONFLICT(Guid) DO UPDATE SET
                 Path=excluded.Path,
                 Type=excluded.Type,
+                Importer=excluded.Importer,
+                PackageId=excluded.PackageId,
                 LastModified=excluded.LastModified;
         ";
         command.Parameters.AddWithValue("$guid", guid.ToString());
         command.Parameters.AddWithValue("$path", path);
         command.Parameters.AddWithValue("$type", type);
+        command.Parameters.AddWithValue("$importer", importer);
+        command.Parameters.AddWithValue("$packageId", packageId);
         command.Parameters.AddWithValue("$lastModified", lastModifiedTimeUtc);
         
         command.ExecuteNonQuery();
@@ -125,6 +162,47 @@ public class AssetDatabase : IDisposable
                  yield return (g, reader.GetString(1), reader.IsDBNull(2) ? "" : reader.GetString(2));
             }
         }
+    }
+
+    public IEnumerable<(Guid Guid, string Path, string Type, string Importer, string PackageId)> GetAllAssetRecords()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT Guid, Path, Type, Importer, PackageId FROM Assets";
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (Guid.TryParse(reader.GetString(0), out var g))
+            {
+                yield return (
+                    g,
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                    reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                    reader.IsDBNull(4) ? string.Empty : reader.GetString(4));
+            }
+        }
+    }
+
+    private void EnsureColumn(string name, string type)
+    {
+        using var check = _connection.CreateCommand();
+        check.CommandText = "PRAGMA table_info(Assets)";
+
+        using (var reader = check.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(1), name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+        }
+
+        using var alter = _connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE Assets ADD COLUMN {name} {type}";
+        alter.ExecuteNonQuery();
     }
 
     public void Dispose()
