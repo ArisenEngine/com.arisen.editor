@@ -68,7 +68,14 @@ public class ArisenPanelFactory : DefaultPanelFactory
         RegisterPanel("Scene", () => new SceneViewModel());
         RegisterPanel("GameView", () => new GameViewModel());
         RegisterPanel("Console", () => new ConsoleViewModel());
-        RegisterPanel("Assets", () => new AssetsBrowserViewModel());
+        RegisterPanel("Assets", () =>
+        {
+            var assets = new AssetsBrowserViewModel
+            {
+                SelectionService = _selectionService
+            };
+            return assets;
+        });
         RegisterPanel("PackageManager", () => new PackageManagerViewModel());
         RegisterPanel("ProjectSettings", () => new ProjectSettingsViewModel());
 

@@ -6,6 +6,7 @@ using System.IO;
 using System.Reactive.Linq;
 using ArisenEngine.Core.Diagnostics;
 using ArisenEditor.Core.Services;
+using ArisenEditor.Core.Assets;
 using ArisenEditor.Utilities;
 using ArisenEditorFramework.Hierarchy;
 using Avalonia.Media.Imaging;
@@ -267,7 +268,19 @@ internal class FileTreeNode : TreeNodeBase
             var oldPath = Path;
             try
             {
-                Path = Path.Replace(m_UndoName, Name);
+                var parentDirectory = System.IO.Path.GetDirectoryName(oldPath);
+                if (string.IsNullOrWhiteSpace(parentDirectory))
+                {
+                    throw new InvalidOperationException("Cannot rename an asset without a parent directory.");
+                }
+
+                Path = System.IO.Path.Combine(parentDirectory, Name);
+                if (!AssetPathPolicy.IsEditableAssetPath(oldPath) ||
+                    !AssetPathPolicy.IsEditableAssetPath(Path))
+                {
+                    throw new InvalidOperationException("Only source assets under workspace/package Assets roots can be renamed from the editor.");
+                }
+
                 if (IsBranch)
                 {
                     var dir = new DirectoryInfo(oldPath);

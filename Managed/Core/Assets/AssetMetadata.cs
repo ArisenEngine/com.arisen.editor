@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using YamlDotNet.Serialization;
 
 namespace ArisenEditor.Core.Assets;
 
@@ -9,11 +7,11 @@ namespace ArisenEditor.Core.Assets;
 /// </summary>
 public class AssetMetadata
 {
-    [YamlMember(Alias = "guid")]
-    public Guid Guid { get; set; }
-    
-    [YamlMember(Alias = "importer_type")]
+    public Guid Guid { get; set; } = Guid.NewGuid();
+
+    public string AssetType { get; set; } = string.Empty;
+
+    public string Importer { get; set; } = string.Empty;
+
     public string? ImporterType { get; set; }
-    
-    // Future expansion: dependencies, importer settings, etc.
 }

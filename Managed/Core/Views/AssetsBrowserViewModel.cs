@@ -26,6 +26,7 @@ internal class AssetsBrowserViewModel : EditorPanelBase
     public override string Title => "Assets Browser";
     public override string Id => "AssetsBrowser";
     public override object Content => new AssetsBrowserView { DataContext = this };
+    public SelectionService? SelectionService { get; set; }
 
     public string AssetsSearchText
     {
@@ -82,6 +83,10 @@ internal class AssetsBrowserViewModel : EditorPanelBase
         {
             this.RaiseAndSetIfChanged(ref m_SelectedAsset, value);
             AssetSelections = value != null ? new[] { value } : Array.Empty<FileTreeNode>();
+            if (SelectionService != null)
+            {
+                SelectionService.CurrentSelection = value;
+            }
         }
     }
 
@@ -166,6 +171,12 @@ internal class AssetsBrowserViewModel : EditorPanelBase
             EditorLog.Log($"[AssetsBrowserViewModel] Discovered {packages.Count} packages.");
             foreach (var package in packages)
             {
+                var pkgAssetsPath = Path.GetFullPath(Path.Combine(package.RootPath, "Assets"));
+                if (!Directory.Exists(pkgAssetsPath))
+                {
+                    continue;
+                }
+
                 // Determine if package is Local (Mutable) or Registry/Cache (Immutable)
                 bool isImmutable = true;
                 if (package.RootPath.Contains("Local", StringComparison.OrdinalIgnoreCase))
@@ -173,8 +184,7 @@ internal class AssetsBrowserViewModel : EditorPanelBase
                     isImmutable = false;
                 }
 
-                string pkgPath = Path.GetFullPath(package.RootPath);
-                var pkgNode = new FileTreeNode(package.Id, pkgPath, true, false, isImmutable);
+                var pkgNode = new FileTreeNode(package.Id, pkgAssetsPath, true, false, isImmutable);
                 pkgNode.Parent = packagesNode;
                 
                 // Add to both collections for visibility
