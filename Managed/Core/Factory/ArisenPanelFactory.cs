@@ -51,9 +51,6 @@ public class ArisenPanelFactory : DefaultPanelFactory
         {
             var hierarchy = new ArisenEditor.ViewModels.HierarchyViewModel();
             hierarchy.SelectionService = _selectionService;
-            // Connect selection for this specific hierarchy instance
-            hierarchy.WhenAnyValue(x => x.SelectedItem)
-                .Subscribe(item => _selectionService.CurrentSelection = item);
             return hierarchy;
         });
         RegisterPanel("Inspector", () =>
@@ -65,7 +62,7 @@ public class ArisenPanelFactory : DefaultPanelFactory
             return inspector;
         });
         
-        RegisterPanel("Scene", () => new SceneViewModel());
+        RegisterPanel("Scene", () => new SceneViewModel(_selectionService));
         RegisterPanel("GameView", () => new GameViewModel());
         RegisterPanel("Console", () => new ConsoleViewModel());
         RegisterPanel("Assets", () =>

@@ -1,16 +1,22 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows.Input;
+using ArisenEditor.Core.Assets;
+using ArisenEditor.Core.Commands;
+using ArisenEditor.Core.Services;
 using ArisenEngine.Core.Assets;
 using ArisenEditorFramework.Inspector;
 using ArisenEngine.Core.ECS;
 using ArisenEngine.Rendering;
 using ArisenEngine.Rendering.Resources;
+using ArisenEngine.Resources.Serialization;
 using ReactiveUI;
+using ICommandManager = ArisenEngine.Core.Automation.ICommandManager;
 
 namespace ArisenEditor.ViewModels;
 
@@ -234,6 +240,116 @@ public class ECSPropertyViewModel : PropertyItemViewModel
     }
 }
 
+public enum SceneTransformProperty
+{
+    Position,
+    Rotation,
+    Scale
+}
+
+public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
+{
+    private readonly SceneAssetEntityNodeViewModel m_Node;
+    private readonly SceneTransformProperty m_Property;
+
+    public SceneTransformPropertyViewModel(
+        SceneAssetEntityNodeViewModel node,
+        SceneTransformProperty property,
+        bool isReadOnly)
+        : base(
+            node,
+            property.ToString(),
+            property == SceneTransformProperty.Rotation ? typeof(Quaternion) : typeof(Vector3),
+            isReadOnly,
+            "Transform")
+    {
+        m_Node = node;
+        m_Property = property;
+    }
+
+    public override object? Value
+    {
+        get
+        {
+            var transform = m_Node.Entity.Transform;
+            return m_Property switch
+            {
+                SceneTransformProperty.Position => transform.Position,
+                SceneTransformProperty.Rotation => transform.Rotation,
+                SceneTransformProperty.Scale => transform.Scale,
+                _ => null
+            };
+        }
+        set
+        {
+            if (IsReadOnly || value == null)
+            {
+                return;
+            }
+
+            var oldTransform = m_Node.Entity.Transform;
+            var newTransform = m_Property switch
+            {
+                SceneTransformProperty.Position when TryGetVector3(value, out var position) =>
+                    oldTransform with { Position = position },
+                SceneTransformProperty.Rotation when TryGetQuaternion(value, out var rotation) =>
+                    oldTransform with { Rotation = rotation },
+                SceneTransformProperty.Scale when TryGetVector3(value, out var scale) =>
+                    oldTransform with { Scale = scale },
+                _ => oldTransform
+            };
+
+            if (newTransform.Equals(oldTransform))
+            {
+                return;
+            }
+
+            var command = new ModifySceneAssetTransformCommand(
+                m_Node.SourcePath,
+                m_Node.EntityIndex,
+                m_Node.Name,
+                oldTransform,
+                newTransform,
+                m_Node.SetTransform);
+
+            try
+            {
+                ArisenKernel.Lifecycle.EngineKernel.Instance.Services
+                    .GetService<ICommandManager>()
+                    ?.Execute(command);
+            }
+            catch (Exception ex)
+            {
+                EditorLog.Error($"[SceneAssetInspector] Failed to edit transform for '{m_Node.Name}'.", ex);
+            }
+        }
+    }
+
+    private static bool TryGetVector3(object value, out Vector3 result)
+    {
+        if (value is Vector3 vector)
+        {
+            result = vector;
+            return true;
+        }
+
+        result = default;
+        return false;
+    }
+
+    private static bool TryGetQuaternion(object value, out Quaternion result)
+    {
+        if (value is Quaternion quaternion)
+        {
+            result = quaternion;
+            return true;
+        }
+
+        result = default;
+        return false;
+    }
+}
+
 /// <summary>
 /// Overrides the standard Inspector to detect when an ECS Entity is selected.
 /// It dynamically builds categories based on the components attached to the entity.
@@ -317,8 +433,22 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         }
         Categories.Clear();
 
+        CanAddComponent = false;
+        AvailableComponentTypes.Clear();
+
         if (TargetObject == null)
             return;
+
+        if (TargetObject is SceneAssetEntityNodeViewModel sceneAssetEntityNode)
+        {
+            RebuildSceneAssetEntityProperties(sceneAssetEntityNode);
+            return;
+        }
+
+        if (TargetObject is FileTreeNode sceneFileNode && TryRebuildSceneAssetProperties(sceneFileNode))
+        {
+            return;
+        }
 
         if (TargetObject is FileTreeNode fileNode && TryRebuildMaterialAssetProperties(fileNode))
         {
@@ -397,11 +527,240 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         }
         else
         {
-            CanAddComponent = false;
-            AvailableComponentTypes.Clear();
             // 3. Fallback to standard reflection for non-ECS objects
             base.RebuildProperties();
         }
+    }
+
+    private void RebuildSceneAssetEntityProperties(SceneAssetEntityNodeViewModel node)
+    {
+        var entity = node.Entity;
+        var category = AddCategory("Scene Entity");
+        AddReadOnly(category, "Name", entity.Name);
+        AddReadOnly(category, "Index", node.EntityIndex);
+        AddReadOnly(category, "Components", FormatSceneComponents(entity));
+        AddReadOnly(category, "Source", node.SourcePath);
+
+        AddSceneAssetEntityTransformCategory(node);
+        AddSceneAssetEntityCameraCategory(entity);
+        AddSceneAssetEntityMeshRendererCategory(entity);
+        AddSceneAssetEntityLightCategory(entity);
+        AddSceneAssetEntityEnvironmentCategory(entity);
+        AddSceneAssetEntityDiagnosticsCategory(entity);
+    }
+
+    private bool TryRebuildSceneAssetProperties(FileTreeNode node)
+    {
+        if (node.IsBranch)
+        {
+            return false;
+        }
+
+        var extension = Path.GetExtension(node.Path);
+        bool looksLikeScene = IsKnownSceneExtension(extension);
+
+        if (!ArisenKernel.Lifecycle.EngineKernel.Instance.Services.TryGetService<IAssetDatabase>(out var assetDatabase) || assetDatabase == null)
+        {
+            if (!looksLikeScene)
+            {
+                return false;
+            }
+
+            AddDiagnosticsCategory("Runtime asset database service is not available.");
+            return true;
+        }
+
+        var guid = node.AssetGuid;
+        if (guid == Guid.Empty)
+        {
+            guid = ArisenEditor.Core.Services.AssetDatabaseService.Instance.GetGuidFromPath(node.Path);
+        }
+
+        if (guid == Guid.Empty)
+        {
+            if (!looksLikeScene)
+            {
+                return false;
+            }
+
+            AddAssetHeader(node, guid, "Scene", string.Empty, string.Empty);
+            AddDiagnosticsCategory("Scene source is not indexed yet. Save or reimport the asset so a .meta GUID is registered.");
+            return true;
+        }
+
+        if (!assetDatabase.TryGetAsset(guid, out var sourceAsset))
+        {
+            if (!looksLikeScene)
+            {
+                return false;
+            }
+
+            AddAssetHeader(node, guid, "Scene", string.Empty, string.Empty);
+            AddDiagnosticsCategory($"Runtime asset database has no record for scene GUID {guid}.");
+            return true;
+        }
+
+        if (!string.Equals(sourceAsset.AssetType, "Scene", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        AddAssetHeader(node, guid, sourceAsset.AssetType, sourceAsset.PackageId, sourceAsset.SourcePath);
+
+        try
+        {
+            var inspection = SceneAssetLoader.InspectScene(
+                assetDatabase,
+                new AssetRef<SceneSourceAsset>(guid, "Scene", sourceAsset.PackageId));
+            AddSceneSummaryCategory(inspection);
+            AddSceneEntitiesCategory(inspection);
+            AddSceneCameraCategory(inspection);
+            AddSceneMeshRendererCategory(inspection);
+            AddSceneLightCategory(inspection);
+            AddSceneEnvironmentCategory(inspection);
+            AddSceneDiagnosticsCategory(inspection);
+        }
+        catch (Exception ex)
+        {
+            AddDiagnosticsCategory(ex.Message);
+        }
+
+        return true;
+    }
+
+    private void AddSceneAssetEntityTransformCategory(SceneAssetEntityNodeViewModel node)
+    {
+        var category = AddCategory("Transform");
+        var isReadOnly = !AssetPathPolicy.IsEditableAssetPath(node.SourcePath);
+        category.Properties.Add(new SceneTransformPropertyViewModel(node, SceneTransformProperty.Position, isReadOnly));
+        category.Properties.Add(new SceneTransformPropertyViewModel(node, SceneTransformProperty.Rotation, isReadOnly));
+        category.Properties.Add(new SceneTransformPropertyViewModel(node, SceneTransformProperty.Scale, isReadOnly));
+
+        if (isReadOnly)
+        {
+            AddReadOnly(category, "Edit Policy", "Only source scene assets under workspace/package Assets roots can be edited.");
+        }
+    }
+
+    private void AddSceneAssetEntityCameraCategory(SceneEntityInspection entity)
+    {
+        if (entity.Camera == null)
+        {
+            return;
+        }
+
+        var camera = entity.Camera;
+        var category = AddCategory("Camera");
+        AddReadOnly(category, "Projection", camera.IsPerspective ? "Perspective" : "Orthographic");
+        AddReadOnly(category, "Vertical FOV", camera.VerticalFov.ToString("0.###"));
+        AddReadOnly(category, "Near Plane", camera.NearPlane.ToString("0.###"));
+        AddReadOnly(category, "Far Plane", camera.FarPlane.ToString("0.###"));
+    }
+
+    private void AddSceneAssetEntityMeshRendererCategory(SceneEntityInspection entity)
+    {
+        if (entity.MeshRenderer == null)
+        {
+            return;
+        }
+
+        var renderer = entity.MeshRenderer;
+        var category = AddCategory("Mesh Renderer");
+        AddReadOnly(category, "Mesh", FormatSceneAssetRef(renderer.Mesh));
+        AddReadOnly(category, "Material", FormatSceneAssetRef(renderer.Material));
+        AddReadOnly(category, "First Submesh", renderer.FirstSubmeshIndex);
+        AddReadOnly(category, "Submesh Count", renderer.SubmeshCount);
+        AddReadOnly(category, "Visible", renderer.Visible);
+        AddReadOnly(category, "Bounds Center", FormatVector3(renderer.BoundsCenter));
+        AddReadOnly(category, "Bounds Extents", FormatVector3(renderer.BoundsExtents));
+    }
+
+    private void AddSceneAssetEntityLightCategory(SceneEntityInspection entity)
+    {
+        if (entity.DirectionalLight != null)
+        {
+            var light = entity.DirectionalLight;
+            var category = AddCategory("Directional Light");
+            AddReadOnly(category, "Direction", FormatVector3(light.Direction));
+            AddReadOnly(category, "Color", FormatVector3(light.Color));
+            AddReadOnly(category, "Intensity", light.Intensity.ToString("0.###"));
+            AddReadOnly(category, "Ambient Intensity", light.AmbientIntensity.ToString("0.###"));
+            AddReadOnly(category, "Enabled", light.Enabled);
+        }
+
+        if (entity.PointLight != null)
+        {
+            var light = entity.PointLight;
+            var category = AddCategory("Point Light");
+            AddReadOnly(category, "Color", FormatVector3(light.Color));
+            AddReadOnly(category, "Intensity", light.Intensity.ToString("0.###"));
+            AddReadOnly(category, "Range", light.Range.ToString("0.###"));
+            AddReadOnly(category, "Enabled", light.Enabled);
+        }
+
+        if (entity.SpotLight != null)
+        {
+            var light = entity.SpotLight;
+            var category = AddCategory("Spot Light");
+            AddReadOnly(category, "Color", FormatVector3(light.Color));
+            AddReadOnly(category, "Intensity", light.Intensity.ToString("0.###"));
+            AddReadOnly(category, "Range", light.Range.ToString("0.###"));
+            AddReadOnly(category, "Inner Cone", light.InnerConeAngleDegrees.ToString("0.###"));
+            AddReadOnly(category, "Outer Cone", light.OuterConeAngleDegrees.ToString("0.###"));
+            AddReadOnly(category, "Enabled", light.Enabled);
+        }
+    }
+
+    private void AddSceneAssetEntityEnvironmentCategory(SceneEntityInspection entity)
+    {
+        if (entity.Environment == null)
+        {
+            return;
+        }
+
+        var environment = entity.Environment;
+        var category = AddCategory("Environment");
+        AddReadOnly(category, "Sky Color", FormatVector3(environment.SkyColor));
+        AddReadOnly(category, "Horizon Color", FormatVector3(environment.HorizonColor));
+        AddReadOnly(category, "Ground Color", FormatVector3(environment.GroundColor));
+        AddReadOnly(category, "Ambient Color", FormatVector3(environment.AmbientColor));
+        AddReadOnly(category, "Sky Intensity", environment.SkyIntensity.ToString("0.###"));
+        AddReadOnly(category, "Ambient Intensity", environment.AmbientIntensity.ToString("0.###"));
+        AddReadOnly(category, "Enabled", environment.Enabled);
+    }
+
+    private void AddSceneAssetEntityDiagnosticsCategory(SceneEntityInspection entity)
+    {
+        if (entity.MeshRenderer == null)
+        {
+            return;
+        }
+
+        var renderer = entity.MeshRenderer;
+        var category = AddCategory("Scene Diagnostics");
+        var count = 0;
+        AddSceneAssetRefDiagnostic(category, "Mesh", renderer.Mesh, ref count);
+        AddSceneAssetRefDiagnostic(category, "Material", renderer.Material, ref count);
+
+        if (count == 0)
+        {
+            AddReadOnly(category, "Status", "Scene entity references are valid.");
+        }
+    }
+
+    private static void AddSceneAssetRefDiagnostic(
+        InspectorCategoryViewModel category,
+        string name,
+        SceneAssetReferenceInspection assetRef,
+        ref int count)
+    {
+        if (!assetRef.HasValue || assetRef.IsResolved)
+        {
+            return;
+        }
+
+        count++;
+        AddReadOnly(category, name, assetRef.Diagnostic);
     }
 
     private bool TryRebuildMaterialAssetProperties(FileTreeNode node)
@@ -548,6 +907,7 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         }
 
         AddMeshActions(assetDatabase, sourceAsset);
+        AddGltfModelImportDiagnostics(sourceAsset);
 
         var mesh = new MeshAsset(
             guid,
@@ -889,6 +1249,182 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         }
     }
 
+    private void AddSceneSummaryCategory(SceneInspectionResult inspection)
+    {
+        var category = AddCategory("Scene");
+        AddReadOnly(category, "Name", string.IsNullOrWhiteSpace(inspection.SceneName) ? Path.GetFileNameWithoutExtension(inspection.SourcePath) : inspection.SceneName);
+        AddReadOnly(category, "Status", inspection.Success ? "Valid" : "Has diagnostics");
+        AddReadOnly(category, "Entities", inspection.EntityCount);
+        AddReadOnly(category, "Cameras", inspection.CameraCount);
+        AddReadOnly(category, "Mesh Renderers", inspection.MeshRendererCount);
+        AddReadOnly(category, "Directional Lights", inspection.DirectionalLightCount);
+        AddReadOnly(category, "Point Lights", inspection.PointLightCount);
+        AddReadOnly(category, "Spot Lights", inspection.SpotLightCount);
+        AddReadOnly(category, "Environments", inspection.EnvironmentCount);
+    }
+
+    private void AddSceneEntitiesCategory(SceneInspectionResult inspection)
+    {
+        var category = AddCategory("Scene Entities");
+        if (inspection.Entities.Count == 0)
+        {
+            AddReadOnly(category, "Entities", "<none>");
+            return;
+        }
+
+        for (int i = 0; i < inspection.Entities.Count; i++)
+        {
+            var entity = inspection.Entities[i];
+            AddReadOnly(
+                category,
+                entity.Name,
+                $"{FormatSceneComponents(entity)} | Position {FormatVector3(entity.Transform.Position)} | Rotation {FormatQuaternion(entity.Transform.Rotation)} | Scale {FormatVector3(entity.Transform.Scale)}");
+        }
+    }
+
+    private void AddSceneCameraCategory(SceneInspectionResult inspection)
+    {
+        var category = AddCategory("Scene Cameras");
+        var count = 0;
+        for (int i = 0; i < inspection.Entities.Count; i++)
+        {
+            var entity = inspection.Entities[i];
+            if (entity.Camera == null)
+            {
+                continue;
+            }
+
+            count++;
+            var camera = entity.Camera;
+            AddReadOnly(
+                category,
+                entity.Name,
+                $"{(camera.IsPerspective ? "Perspective" : "Orthographic")} | FOV {camera.VerticalFov:0.###} | Near {camera.NearPlane:0.###} | Far {camera.FarPlane:0.###}");
+        }
+
+        if (count == 0)
+        {
+            AddReadOnly(category, "Cameras", "<none>");
+        }
+    }
+
+    private void AddSceneMeshRendererCategory(SceneInspectionResult inspection)
+    {
+        var category = AddCategory("Scene Mesh Renderers");
+        var count = 0;
+        for (int i = 0; i < inspection.Entities.Count; i++)
+        {
+            var entity = inspection.Entities[i];
+            if (entity.MeshRenderer == null)
+            {
+                continue;
+            }
+
+            count++;
+            var renderer = entity.MeshRenderer;
+            AddReadOnly(
+                category,
+                entity.Name,
+                $"Mesh {FormatSceneAssetRef(renderer.Mesh)} | Material {FormatSceneAssetRef(renderer.Material)} | FirstSubmesh {renderer.FirstSubmeshIndex} | SubmeshCount {renderer.SubmeshCount} | Visible {renderer.Visible} | Bounds {FormatVector3(renderer.BoundsCenter)} / {FormatVector3(renderer.BoundsExtents)}");
+        }
+
+        if (count == 0)
+        {
+            AddReadOnly(category, "Renderers", "<none>");
+        }
+    }
+
+    private void AddSceneLightCategory(SceneInspectionResult inspection)
+    {
+        var category = AddCategory("Scene Lights");
+        var count = 0;
+        for (int i = 0; i < inspection.Entities.Count; i++)
+        {
+            var entity = inspection.Entities[i];
+            if (entity.DirectionalLight != null)
+            {
+                count++;
+                var light = entity.DirectionalLight;
+                AddReadOnly(
+                    category,
+                    $"{entity.Name} Directional",
+                    $"Direction {FormatVector3(light.Direction)} | Color {FormatVector3(light.Color)} | Intensity {light.Intensity:0.###} | Ambient {light.AmbientIntensity:0.###} | Enabled {light.Enabled}");
+            }
+
+            if (entity.PointLight != null)
+            {
+                count++;
+                var light = entity.PointLight;
+                AddReadOnly(
+                    category,
+                    $"{entity.Name} Point",
+                    $"Color {FormatVector3(light.Color)} | Intensity {light.Intensity:0.###} | Range {light.Range:0.###} | Enabled {light.Enabled}");
+            }
+
+            if (entity.SpotLight != null)
+            {
+                count++;
+                var light = entity.SpotLight;
+                AddReadOnly(
+                    category,
+                    $"{entity.Name} Spot",
+                    $"Color {FormatVector3(light.Color)} | Intensity {light.Intensity:0.###} | Range {light.Range:0.###} | Inner {light.InnerConeAngleDegrees:0.###} | Outer {light.OuterConeAngleDegrees:0.###} | Enabled {light.Enabled}");
+            }
+        }
+
+        if (count == 0)
+        {
+            AddReadOnly(category, "Lights", "<none>");
+        }
+    }
+
+    private void AddSceneEnvironmentCategory(SceneInspectionResult inspection)
+    {
+        var category = AddCategory("Scene Environments");
+        var count = 0;
+        for (int i = 0; i < inspection.Entities.Count; i++)
+        {
+            var entity = inspection.Entities[i];
+            if (entity.Environment == null)
+            {
+                continue;
+            }
+
+            count++;
+            var environment = entity.Environment;
+            AddReadOnly(
+                category,
+                entity.Name,
+                $"Sky {FormatVector3(environment.SkyColor)} | Horizon {FormatVector3(environment.HorizonColor)} | Ground {FormatVector3(environment.GroundColor)} | Ambient {FormatVector3(environment.AmbientColor)} | SkyIntensity {environment.SkyIntensity:0.###} | AmbientIntensity {environment.AmbientIntensity:0.###} | Enabled {environment.Enabled}");
+        }
+
+        if (count == 0)
+        {
+            AddReadOnly(category, "Environments", "<none>");
+        }
+    }
+
+    private void AddSceneDiagnosticsCategory(SceneInspectionResult inspection)
+    {
+        var category = AddCategory("Scene Diagnostics");
+        if (inspection.Success)
+        {
+            AddReadOnly(category, "Status", "Scene inspection passed.");
+            return;
+        }
+
+        if (inspection.Diagnostics.Count == 0)
+        {
+            AddReadOnly(category, "Status", "Scene inspection failed without a diagnostic.");
+            return;
+        }
+
+        for (int i = 0; i < inspection.Diagnostics.Count; i++)
+        {
+            AddReadOnly(category, $"Diagnostic {i + 1}", inspection.Diagnostics[i]);
+        }
+    }
+
     private void AddShaderSourceCategory(
         string categoryName,
         ShaderAsset shader,
@@ -1083,6 +1619,122 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         AddReadOnly(category, "Color Op", renderState.ColorBlendOp.ToString());
     }
 
+    private void AddGltfModelImportDiagnostics(AssetRecord sourceAsset)
+    {
+        if (!IsGltfSourcePath(sourceAsset.SourcePath))
+        {
+            return;
+        }
+
+        try
+        {
+            var plan = GltfModelImportPlanner.CreatePlan(sourceAsset.SourcePath, sourceAsset.Guid, sourceAsset.PackageId);
+            AddGltfModelSummaryCategory(plan);
+            AddGltfGeneratedChildrenCategory(plan);
+            AddGltfMaterialPreviewCategory(plan);
+            AddGltfTextureRefCategory(plan);
+            AddGltfWarningsCategory(plan);
+        }
+        catch (Exception ex)
+        {
+            var category = AddCategory("Model Import");
+            AddReadOnly(category, "Status", ex.Message);
+        }
+    }
+
+    private void AddGltfModelSummaryCategory(GltfModelImportPlan plan)
+    {
+        var category = AddCategory("Model Import");
+        AddReadOnly(category, "Source Guid", plan.SourceGuid);
+        AddReadOnly(category, "Package", plan.PackageId);
+        AddReadOnly(category, "Scenes", CountGeneratedChildren(plan, "scene"));
+        AddReadOnly(category, "Meshes", CountGeneratedChildren(plan, "mesh"));
+        AddReadOnly(category, "Materials", plan.Materials.Count);
+        AddReadOnly(category, "Images", CountGeneratedChildren(plan, "texture2d"));
+        AddReadOnly(category, "Texture Refs", CountGltfTextureRefs(plan));
+        AddReadOnly(category, "Warnings", plan.Warnings.Count);
+    }
+
+    private void AddGltfGeneratedChildrenCategory(GltfModelImportPlan plan)
+    {
+        var category = AddCategory("Generated Children");
+        if (plan.GeneratedChildren.Count == 0)
+        {
+            AddReadOnly(category, "Children", "<none>");
+            return;
+        }
+
+        for (int i = 0; i < plan.GeneratedChildren.Count; i++)
+        {
+            var child = plan.GeneratedChildren[i];
+            AddReadOnly(
+                category,
+                $"{child.Kind} {i}",
+                $"{child.Key} | {child.Metadata.AssetType} | {child.Metadata.Guid}");
+        }
+    }
+
+    private void AddGltfMaterialPreviewCategory(GltfModelImportPlan plan)
+    {
+        var category = AddCategory("Imported Materials");
+        if (plan.Materials.Count == 0)
+        {
+            AddReadOnly(category, "Materials", "<none>");
+            return;
+        }
+
+        for (int i = 0; i < plan.Materials.Count; i++)
+        {
+            var material = plan.Materials[i];
+            var name = string.IsNullOrWhiteSpace(material.Name) ? $"Material {i}" : material.Name;
+            AddReadOnly(
+                category,
+                name,
+                $"Guid {material.Guid} | BaseColor {FormatVector4(material.BaseColorFactor)} | Metallic {material.MetallicFactor:0.###} | Roughness {material.RoughnessFactor:0.###}");
+        }
+    }
+
+    private void AddGltfTextureRefCategory(GltfModelImportPlan plan)
+    {
+        var category = AddCategory("Imported Texture Refs");
+        var count = 0;
+        for (int i = 0; i < plan.Materials.Count; i++)
+        {
+            var material = plan.Materials[i];
+            if (material.BaseColorTexture != null)
+            {
+                AddReadOnly(category, $"Material {i} BaseColor", FormatGltfTextureRef(material.BaseColorTexture));
+                count++;
+            }
+
+            if (material.NormalTexture != null)
+            {
+                AddReadOnly(category, $"Material {i} Normal", FormatGltfTextureRef(material.NormalTexture));
+                count++;
+            }
+        }
+
+        if (count == 0)
+        {
+            AddReadOnly(category, "Texture Refs", "<none>");
+        }
+    }
+
+    private void AddGltfWarningsCategory(GltfModelImportPlan plan)
+    {
+        var category = AddCategory("Model Import Warnings");
+        if (plan.Warnings.Count == 0)
+        {
+            AddReadOnly(category, "Warnings", "<none>");
+            return;
+        }
+
+        for (int i = 0; i < plan.Warnings.Count; i++)
+        {
+            AddReadOnly(category, $"Warning {i + 1}", plan.Warnings[i]);
+        }
+    }
+
     private void AddDiagnosticsCategory(string message)
     {
         var category = AddCategory("Diagnostics");
@@ -1205,6 +1857,19 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
                string.Equals(extension, ".fbx", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsKnownSceneExtension(string extension)
+    {
+        return string.Equals(extension, ".arisenscene", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(extension, ".scene", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsGltfSourcePath(string sourcePath)
+    {
+        var extension = Path.GetExtension(sourcePath);
+        return string.Equals(extension, ".gltf", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(extension, ".glb", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsKnownShaderExtension(string extension)
     {
         return string.Equals(extension, ".shader", StringComparison.OrdinalIgnoreCase) ||
@@ -1231,8 +1896,8 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         if (string.Equals(extension, ".glb", StringComparison.OrdinalIgnoreCase))
         {
             sourceFormat = MeshSourceFormat.GltfBinary;
-            diagnostic = "Binary glTF (.glb) is indexed, but the first runtime mesh cooker scope supports .gltf JSON sources only.";
-            return false;
+            diagnostic = string.Empty;
+            return true;
         }
 
         if (string.Equals(extension, ".armesh", StringComparison.OrdinalIgnoreCase))
@@ -1299,6 +1964,101 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
     private static string FormatVector3(System.Numerics.Vector3 value)
     {
         return $"{value.X:0.###}, {value.Y:0.###}, {value.Z:0.###}";
+    }
+
+    private static string FormatVector4(System.Numerics.Vector4 value)
+    {
+        return $"{value.X:0.###}, {value.Y:0.###}, {value.Z:0.###}, {value.W:0.###}";
+    }
+
+    private static string FormatQuaternion(System.Numerics.Quaternion value)
+    {
+        return $"{value.X:0.###}, {value.Y:0.###}, {value.Z:0.###}, {value.W:0.###}";
+    }
+
+    private static string FormatSceneComponents(SceneEntityInspection entity)
+    {
+        var components = new List<string> { "Transform" };
+        if (entity.Camera != null) components.Add("Camera");
+        if (entity.MeshRenderer != null) components.Add("MeshRenderer");
+        if (entity.DirectionalLight != null) components.Add("DirectionalLight");
+        if (entity.PointLight != null) components.Add("PointLight");
+        if (entity.SpotLight != null) components.Add("SpotLight");
+        if (entity.Environment != null) components.Add("Environment");
+        return string.Join(", ", components);
+    }
+
+    private static string FormatSceneAssetRef(SceneAssetReferenceInspection assetRef)
+    {
+        if (!assetRef.HasValue)
+        {
+            return "<none>";
+        }
+
+        var source = string.IsNullOrWhiteSpace(assetRef.SourcePath)
+            ? "<unresolved>"
+            : assetRef.SourcePath;
+        var status = assetRef.IsResolved
+            ? assetRef.ActualAssetType
+            : assetRef.Diagnostic;
+        return $"{assetRef.Guid} | {status} | {source}";
+    }
+
+    private static string FormatGltfTextureRef(GltfImportedTextureRef textureRef)
+    {
+        string source;
+        if (!string.IsNullOrWhiteSpace(textureRef.Uri) &&
+            textureRef.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            source = $"embedded data URI ({textureRef.MimeType ?? "unknown MIME"})";
+        }
+        else if (!string.IsNullOrWhiteSpace(textureRef.Uri))
+        {
+            source = textureRef.Uri;
+        }
+        else if (textureRef.BufferView >= 0)
+        {
+            source = $"bufferView {textureRef.BufferView} ({textureRef.MimeType ?? "unknown MIME"})";
+        }
+        else
+        {
+            source = "<unresolved>";
+        }
+
+        return $"Texture {textureRef.TextureIndex} | Image {textureRef.ImageIndex} | {source}";
+    }
+
+    private static int CountGltfTextureRefs(GltfModelImportPlan plan)
+    {
+        var count = 0;
+        for (int i = 0; i < plan.Materials.Count; i++)
+        {
+            if (plan.Materials[i].BaseColorTexture != null)
+            {
+                count++;
+            }
+
+            if (plan.Materials[i].NormalTexture != null)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int CountGeneratedChildren(GltfModelImportPlan plan, string kind)
+    {
+        var count = 0;
+        for (int i = 0; i < plan.GeneratedChildren.Count; i++)
+        {
+            if (string.Equals(plan.GeneratedChildren[i].Kind, kind, StringComparison.OrdinalIgnoreCase))
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private sealed record ReferencingMaterialShader(

@@ -14,7 +14,9 @@ public class HierarchyMenuProvider : IMenuProvider
 {
     public IEnumerable<MenuAction> GetMenuItems(string menuId, object? context)
     {
-        if (menuId == "Hierarchy.CreateMenu" || (menuId == "Hierarchy.ContextMenu" && (context == null || context is SceneNodeViewModel)))
+        if (menuId == "Hierarchy.CreateMenu" ||
+            (menuId == "Hierarchy.ContextMenu" &&
+             (context == null || context is SceneNodeViewModel { IsReadOnly: false })))
         {
             yield return new MenuAction("Empty Entity", ReactiveCommand.Create(() => 
             {

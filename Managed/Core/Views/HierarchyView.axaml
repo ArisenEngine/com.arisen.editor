@@ -96,12 +96,26 @@
                                  VerticalAlignment="Center"/>
                     </StackPanel>
                 </TreeDataTemplate>
+
+                <TreeDataTemplate DataType="vm:SceneAssetEntityNodeViewModel" ItemsSource="{Binding Children}">
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="4,2">
+                        <PathIcon Data="{StaticResource EntityIcon}" Width="14" Height="14" Foreground="{DynamicResource TextBrush}"/>
+                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding ComponentSummary}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#64748b"
+                                   FontSize="11"/>
+                    </StackPanel>
+                </TreeDataTemplate>
             </TreeView.DataTemplates>
             <TreeView.Styles>
                 <Style Selector="TreeViewItem[DataContext={x:Type vm:SceneNodeViewModel}]" x:DataType="vm:SceneNodeViewModel">
                     <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay, FallbackValue=False}"/>
                 </Style>
                 <Style Selector="TreeViewItem[DataContext={x:Type vm:EntityNodeViewModel}]" x:DataType="vm:EntityNodeViewModel">
+                    <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay, FallbackValue=False}"/>
+                </Style>
+                <Style Selector="TreeViewItem[DataContext={x:Type vm:SceneAssetEntityNodeViewModel}]" x:DataType="vm:SceneAssetEntityNodeViewModel">
                     <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay, FallbackValue=False}"/>
                 </Style>
             </TreeView.Styles>
