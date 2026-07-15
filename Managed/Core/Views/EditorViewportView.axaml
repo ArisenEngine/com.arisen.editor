@@ -9,6 +9,70 @@
     
     <Grid>
         <ContentControl x:Name="ViewportContainer" Background="Black" />
+
+        <Canvas IsHitTestVisible="False">
+            <Border Canvas.Left="{Binding SelectionMarkerLeft}"
+                    Canvas.Top="{Binding SelectionMarkerTop}"
+                    IsVisible="{Binding IsSelectionMarkerVisible}">
+                <Grid ColumnDefinitions="20,Auto" RowDefinitions="20">
+                    <Ellipse Grid.Column="0"
+                             Width="20"
+                             Height="20"
+                             Stroke="#7dd3fc"
+                             StrokeThickness="2"
+                             Fill="#22135bec"/>
+                    <Ellipse Grid.Column="0"
+                             Width="4"
+                             Height="4"
+                             Fill="#f8fafc"/>
+                    <Border Grid.Column="1"
+                            Margin="8,0,0,0"
+                            Padding="8,3"
+                            VerticalAlignment="Center"
+                            Background="#cc0a0f18"
+                            BorderBrush="#7dd3fc"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                        <TextBlock Text="{Binding SelectedSceneEntityName}"
+                                   Foreground="#e0f2fe"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="180"/>
+                    </Border>
+                </Grid>
+            </Border>
+        </Canvas>
+
+        <Border VerticalAlignment="Top"
+                HorizontalAlignment="Left"
+                Margin="10"
+                Padding="10,7"
+                IsVisible="{Binding HasSceneEntitySelection}"
+                Background="#cc0a0f18"
+                BorderBrush="#475569"
+                BorderThickness="1"
+                CornerRadius="4"
+                IsHitTestVisible="False">
+            <StackPanel Spacing="2">
+                <TextBlock Text="{Binding SelectedSceneEntityName}"
+                           Foreground="#f8fafc"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="260"/>
+                <TextBlock Text="{Binding SelectedSceneEntitySummary}"
+                           Foreground="#94a3b8"
+                           FontSize="11"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="260"/>
+                <TextBlock Text="{Binding SelectedSceneEntityPosition}"
+                           Foreground="#7dd3fc"
+                           FontSize="11"
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="260"/>
+            </StackPanel>
+        </Border>
         
         <StackPanel Orientation="Horizontal" VerticalAlignment="Top" HorizontalAlignment="Right" Margin="10">
             <Button Content="Capture Frame (RenderDoc)" Click="OnCaptureClick" 

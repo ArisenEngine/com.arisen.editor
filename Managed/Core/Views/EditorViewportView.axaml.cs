@@ -24,11 +24,29 @@ public partial class EditorViewportView : UserControl
         }
     }
 
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == BoundsProperty ||
+            change.Property == DataContextProperty)
+        {
+            PushViewportSizeToViewModel();
+        }
+    }
+
     private void OnCaptureClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is EditorViewportViewModel vm)
         {
             vm.Capture();
+        }
+    }
+
+    private void PushViewportSizeToViewModel()
+    {
+        if (DataContext is EditorViewportViewModel vm)
+        {
+            vm.SetViewportSize(Bounds.Width, Bounds.Height);
         }
     }
 }

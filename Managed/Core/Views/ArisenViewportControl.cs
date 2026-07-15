@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -37,6 +38,8 @@ public partial class ArisenViewportControl : Control
     private DateTime _lastPresentationSkipLogTime = DateTime.MinValue;
     private RenderOutputPresentationSkipReason _lastPresentationSkipReason;
     private RenderOutputPresentationState _presentationState;
+    private int _lastRequestedSurfaceWidth;
+    private int _lastRequestedSurfaceHeight;
     
     private readonly Action _updateAction;
     private readonly Dictionary<IntPtr, ICompositionImportedGpuImage> _imageCache = new();
@@ -136,7 +139,7 @@ public partial class ArisenViewportControl : Control
             // 2. Setup Composition Visuals
             _surface = _compositor.CreateDrawingSurface();
             _visual = _compositor.CreateSurfaceVisual();
-            _visual.Size = new Avalonia.Vector((float)Bounds.Width, (float)Bounds.Height);
+            UpdatePresentationVisualGeometry();
             _visual.Surface = _surface;
             
             ElementComposition.SetElementChildVisual(this, _visual);
@@ -147,10 +150,18 @@ public partial class ArisenViewportControl : Control
             {
                 var pixelSize = GetPhysicalPixelSize();
                 _renderSubsystem.RegisterSurface(this.Handle.Handle, "EditorViewport", SurfaceType.SceneView, pixelSize.Width, pixelSize.Height);
+                _lastRequestedSurfaceWidth = pixelSize.Width;
+                _lastRequestedSurfaceHeight = pixelSize.Height;
                 KernelLog.Info($"[ArisenViewportControl] Registered surface 0x{this.Handle.Handle:X} ({pixelSize.Width}x{pixelSize.Height})");
             }
 
             _isInitialized = true;
+            RequestSurfaceResize(force: true);
+            Dispatcher.UIThread.Post(() =>
+            {
+                RequestSurfaceResize(force: true);
+                QueueNextFrame();
+            }, DispatcherPriority.Loaded);
             QueueNextFrame();
         }
         catch (Exception ex)
@@ -187,6 +198,8 @@ public partial class ArisenViewportControl : Control
         _syncCapabilitiesLogged = false;
         _lastPresentationSkipReason = RenderOutputPresentationSkipReason.None;
         _lastPresentationSkipLogTime = DateTime.MinValue;
+        _lastRequestedSurfaceWidth = 0;
+        _lastRequestedSurfaceHeight = 0;
     }
 
     private void OnCompositionUpdate()
@@ -197,7 +210,7 @@ public partial class ArisenViewportControl : Control
         // Sync visual size
         if (_visual != null)
         {
-            _visual.Size = new Avalonia.Vector((float)Bounds.Width, (float)Bounds.Height);
+            UpdatePresentationVisualGeometry();
         }
 
         // Pull latest frame info from engine
@@ -450,16 +463,59 @@ public partial class ArisenViewportControl : Control
         base.OnPropertyChanged(change);
         if (change.Property == BoundsProperty && _isInitialized)
         {
-            var size = GetPhysicalPixelSize();
-            _renderSubsystem?.ResizeSurface(this.Handle.Handle, size.Width, size.Height);
+            RequestSurfaceResize(force: false);
             QueueNextFrame();
         }
+    }
+
+    private void RequestSurfaceResize(bool force)
+    {
+        var renderSubsystem = _renderSubsystem;
+        if (!_isInitialized || renderSubsystem == null)
+        {
+            return;
+        }
+
+        var size = GetPhysicalPixelSize();
+        if (!force &&
+            size.Width == _lastRequestedSurfaceWidth &&
+            size.Height == _lastRequestedSurfaceHeight)
+        {
+            return;
+        }
+
+        _lastRequestedSurfaceWidth = size.Width;
+        _lastRequestedSurfaceHeight = size.Height;
+        renderSubsystem.ResizeSurface(this.Handle.Handle, size.Width, size.Height);
     }
 
     private PixelSize GetPhysicalPixelSize()
     {
         var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         return new PixelSize((int)Math.Max(1, Bounds.Width * scaling), (int)Math.Max(1, Bounds.Height * scaling));
+    }
+
+    private void UpdatePresentationVisualGeometry()
+    {
+        if (_visual == null)
+        {
+            return;
+        }
+
+        var width = (float)Math.Max(0.0, Bounds.Width);
+        var height = (float)Math.Max(0.0, Bounds.Height);
+        _visual.Size = new Avalonia.Vector(width, height);
+        _visual.CenterPoint = new Vector3(width * 0.5f, height * 0.5f, 0.0f);
+
+        // Avalonia's Vulkan opaque-image import presents external image rows in
+        // the opposite vertical direction. Compensate only at that interop boundary;
+        // engine clip space and RHI viewports retain their top-left convention.
+        _visual.Scale = string.Equals(
+            _handleType,
+            KnownPlatformGraphicsExternalImageHandleTypes.VulkanOpaqueNtHandle,
+            StringComparison.Ordinal)
+            ? new Vector3(1.0f, -1.0f, 1.0f)
+            : Vector3.One;
     }
 }
 

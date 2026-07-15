@@ -45,6 +45,11 @@ public partial class HierarchyView : UserControl
                     if (this.DataContext is ViewModels.HierarchyViewModel vm)
                         vm.SelectedItem = sceneNode;
                 }
+                else if (control.DataContext is ViewModels.SceneAssetEntityNodeViewModel sceneAssetEntityNode)
+                {
+                    if (this.DataContext is ViewModels.HierarchyViewModel vm)
+                        vm.SelectedItem = sceneAssetEntityNode;
+                }
                 else if (this.DataContext is ViewModels.HierarchyViewModel vw)
                 {
                     vw.SelectedItem = null;

@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using ArisenEngine.Core.Assets;
 using ArisenEditor.Core.Commands;
 using ArisenEditor.Core.Services;
 using ArisenKernel.Contracts;
@@ -11,6 +14,7 @@ using ArisenEditorFramework.Core;
 using ArisenEditorFramework.Services;
 using ArisenEditorFramework.UI.Menus;
 using ArisenEngine.Core.ECS;
+using ArisenEngine.Resources.Serialization;
 using ReactiveUI;
 
 namespace ArisenEditor.ViewModels;
@@ -31,11 +35,13 @@ public class SceneNodeViewModel : ReactiveObject
         set => this.RaiseAndSetIfChanged(ref m_IsExpanded, value);
     }
 
-    public ObservableCollection<EntityNodeViewModel> Entities { get; } = new();
+    public ObservableCollection<ReactiveObject> Entities { get; } = new();
+    public bool IsReadOnly { get; }
 
-    public SceneNodeViewModel(string name)
+    public SceneNodeViewModel(string name, bool isReadOnly = false)
     {
         m_Name = string.IsNullOrWhiteSpace(name) ? "Unnamed Scene" : name;
+        IsReadOnly = isReadOnly;
     }
 }
 
@@ -114,12 +120,77 @@ public class EntityNodeViewModel : ReactiveObject
     }
 }
 
+public sealed class SceneAssetEntityNodeViewModel : ReactiveObject
+{
+    public SceneInspectionResult Scene { get; }
+    public int EntityIndex { get; }
+    public string SourcePath => Scene.SourcePath;
+    public string ComponentSummary { get; }
+
+    private SceneEntityInspection m_Entity;
+    public SceneEntityInspection Entity
+    {
+        get => m_Entity;
+        private set => this.RaiseAndSetIfChanged(ref m_Entity, value);
+    }
+
+    private string m_Name;
+    public string Name
+    {
+        get => m_Name;
+        private set => this.RaiseAndSetIfChanged(ref m_Name, value);
+    }
+
+    private bool m_IsExpanded = true;
+    public bool IsExpanded
+    {
+        get => m_IsExpanded;
+        set => this.RaiseAndSetIfChanged(ref m_IsExpanded, value);
+    }
+
+    public ObservableCollection<SceneAssetEntityNodeViewModel> Children { get; } = new();
+
+    public SceneAssetEntityNodeViewModel(SceneInspectionResult scene, SceneEntityInspection entity, int entityIndex)
+    {
+        Scene = scene;
+        m_Entity = entity;
+        EntityIndex = entityIndex;
+        m_Name = string.IsNullOrWhiteSpace(entity.Name) ? $"Entity {entityIndex}" : entity.Name;
+        ComponentSummary = BuildComponentSummary(entity);
+    }
+
+    public void SetTransform(SceneTransformInspection transform)
+    {
+        Entity = Entity with { Transform = transform };
+        this.RaisePropertyChanged("Position");
+        this.RaisePropertyChanged("Rotation");
+        this.RaisePropertyChanged("Scale");
+    }
+
+    private static string BuildComponentSummary(SceneEntityInspection entity)
+    {
+        var components = new List<string> { "Transform" };
+        if (entity.Camera != null) components.Add("Camera");
+        if (entity.MeshRenderer != null) components.Add("MeshRenderer");
+        if (entity.DirectionalLight != null) components.Add("DirectionalLight");
+        if (entity.PointLight != null) components.Add("PointLight");
+        if (entity.SpotLight != null) components.Add("SpotLight");
+        if (entity.Environment != null) components.Add("Environment");
+        return string.Join(", ", components);
+    }
+}
+
 internal class HierarchyViewModel : EditorPanelBase
 {
     private ObservableCollection<EntityNodeViewModel> m_AllEntities = new();
+    private ObservableCollection<SceneAssetEntityNodeViewModel> m_AllSceneAssetEntities = new();
     private ObservableCollection<SceneNodeViewModel> m_RootNodes = new();
     private readonly System.Collections.Generic.Dictionary<Entity, EntityNodeViewModel> m_EntityMap = new();
     private readonly CompositeDisposable m_Disposables = new();
+    private SelectionService? m_SelectionService;
+    private SceneInspectionResult? m_InspectedSceneAsset;
+    private bool m_IsShowingSceneAssetInspection;
+    private bool m_IsApplyingExternalSelection;
 
     private string m_SearchText = string.Empty;
     public string SearchText
@@ -136,7 +207,28 @@ internal class HierarchyViewModel : EditorPanelBase
     public ObservableCollection<MenuAction> ContextActions { get; } = new();
 
     public EntityManager? ActiveEntityManager { get; set; }
-    public ArisenEditor.Core.Services.SelectionService SelectionService { get; set; } = null!;
+    public ArisenEditor.Core.Services.SelectionService? SelectionService
+    {
+        get => m_SelectionService;
+        set
+        {
+            if (ReferenceEquals(m_SelectionService, value))
+            {
+                return;
+            }
+
+            if (m_SelectionService != null)
+            {
+                m_SelectionService.SelectionChanged -= OnExternalSelectionChanged;
+            }
+
+            m_SelectionService = value;
+            if (m_SelectionService != null)
+            {
+                m_SelectionService.SelectionChanged += OnExternalSelectionChanged;
+            }
+        }
+    }
 
     public override string Title => "Hierarchy";
     public override string Id => "Hierarchy";
@@ -165,7 +257,14 @@ internal class HierarchyViewModel : EditorPanelBase
         RefreshMenus();
 
         this.WhenAnyValue(x => x.SelectedItem)
-            .Subscribe(_ => RefreshMenus(SelectedItem));
+            .Subscribe(item =>
+            {
+                RefreshMenus(item);
+                if (!m_IsApplyingExternalSelection && m_SelectionService != null)
+                {
+                    m_SelectionService.CurrentSelection = item;
+                }
+            });
             
         // Subscribe to SceneManagerService to auto-refresh when the active scene changes
         ArisenEditor.Core.Services.SceneManagerService.Instance
@@ -173,6 +272,10 @@ internal class HierarchyViewModel : EditorPanelBase
             .ObserveOn(RxApp.MainThreadScheduler)
             .Subscribe(scene => 
             {
+                m_IsShowingSceneAssetInspection = false;
+                m_InspectedSceneAsset = null;
+                m_AllSceneAssetEntities.Clear();
+
                 if (scene != null)
                 {
                     RefreshHierarchy(scene.Registry);
@@ -191,6 +294,8 @@ internal class HierarchyViewModel : EditorPanelBase
 
         svc.EntityNameChanged += (entity, newName) =>
         {
+            if (m_IsShowingSceneAssetInspection) return;
+
             if (m_EntityMap.TryGetValue(entity, out var node))
             {
                 node.SetNameWithoutNotifying(newName);
@@ -199,6 +304,7 @@ internal class HierarchyViewModel : EditorPanelBase
 
         svc.EntityCreated += (entity) =>
         {
+            if (m_IsShowingSceneAssetInspection) return;
             if (ActiveEntityManager == null) return;
             string name = $"Entity {entity.Id}";
             if (ActiveEntityManager.HasComponent<NameComponent>(entity))
@@ -223,6 +329,8 @@ internal class HierarchyViewModel : EditorPanelBase
 
         svc.EntityDeleted += (entity) =>
         {
+            if (m_IsShowingSceneAssetInspection) return;
+
             if (m_EntityMap.TryGetValue(entity, out var node))
             {
                 if (node.ParentNode != null)
@@ -240,6 +348,8 @@ internal class HierarchyViewModel : EditorPanelBase
 
         svc.EntityParentChanged += (entity, newParent) =>
         {
+            if (m_IsShowingSceneAssetInspection) return;
+
             if (m_EntityMap.TryGetValue(entity, out var node))
             {
                 if (node.ParentNode != null)
@@ -266,6 +376,8 @@ internal class HierarchyViewModel : EditorPanelBase
 
         ArisenEditor.Core.Services.SceneManagerService.Instance.PropertyChanged += (sender, args) =>
         {
+            if (m_IsShowingSceneAssetInspection) return;
+
             if (args.PropertyName == nameof(ArisenEditor.Core.Services.SceneManagerService.IsDirty) ||
                 args.PropertyName == nameof(ArisenEditor.Core.Services.SceneManagerService.ActiveScene))
             {
@@ -296,6 +408,12 @@ internal class HierarchyViewModel : EditorPanelBase
 
     private void ApplyFilter(bool rootExpanded = true)
     {
+        if (m_IsShowingSceneAssetInspection)
+        {
+            ApplySceneAssetFilter(rootExpanded);
+            return;
+        }
+
         var svc = ArisenEditor.Core.Services.SceneManagerService.Instance;
         var sceneName = svc.ActiveScene?.Name ?? "Unnamed Scene";
         if (svc.IsDirty) sceneName += "*";
@@ -317,8 +435,198 @@ internal class HierarchyViewModel : EditorPanelBase
         RootNodes = new ObservableCollection<SceneNodeViewModel> { sceneNode };
     }
 
+    private void ApplySceneAssetFilter(bool rootExpanded = true)
+    {
+        if (m_InspectedSceneAsset == null)
+        {
+            RootNodes.Clear();
+            return;
+        }
+
+        var inspection = m_InspectedSceneAsset.Value;
+        var sceneName = string.IsNullOrWhiteSpace(inspection.SceneName)
+            ? Path.GetFileNameWithoutExtension(inspection.SourcePath)
+            : inspection.SceneName;
+        var sceneNode = new SceneNodeViewModel(sceneName, isReadOnly: true) { IsExpanded = rootExpanded };
+
+        if (string.IsNullOrWhiteSpace(m_SearchText))
+        {
+            foreach (var e in m_AllSceneAssetEntities)
+                sceneNode.Entities.Add(e);
+        }
+        else
+        {
+            foreach (var e in m_AllSceneAssetEntities.Where(en => en.Name.Contains(m_SearchText, StringComparison.OrdinalIgnoreCase)))
+                sceneNode.Entities.Add(e);
+            sceneNode.IsExpanded = true;
+        }
+
+        RootNodes = new ObservableCollection<SceneNodeViewModel> { sceneNode };
+    }
+
+    private void OnExternalSelectionChanged(object? selection)
+    {
+        if (selection is not FileTreeNode node)
+        {
+            return;
+        }
+
+        if (!TryShowSceneAssetHierarchy(node))
+        {
+            return;
+        }
+
+        m_IsApplyingExternalSelection = true;
+        try
+        {
+            SelectedItem = null;
+        }
+        finally
+        {
+            m_IsApplyingExternalSelection = false;
+        }
+    }
+
+    private bool TryShowSceneAssetHierarchy(FileTreeNode node)
+    {
+        if (node.IsBranch)
+        {
+            return false;
+        }
+
+        var extension = Path.GetExtension(node.Path);
+        bool looksLikeScene = IsKnownSceneExtension(extension);
+
+        if (!ArisenKernel.Lifecycle.EngineKernel.Instance.Services.TryGetService<IAssetDatabase>(out var assetDatabase) || assetDatabase == null)
+        {
+            if (!looksLikeScene)
+            {
+                return false;
+            }
+
+            SetSceneAssetInspection(new SceneInspectionResult(
+                false,
+                Path.GetFileNameWithoutExtension(node.Path),
+                node.Path,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                Array.Empty<SceneEntityInspection>(),
+                new[] { "Runtime asset database service is not available." }));
+            return true;
+        }
+
+        var guid = node.AssetGuid;
+        if (guid == Guid.Empty)
+        {
+            guid = ArisenEditor.Core.Services.AssetDatabaseService.Instance.GetGuidFromPath(node.Path);
+        }
+
+        if (guid == Guid.Empty)
+        {
+            if (!looksLikeScene)
+            {
+                return false;
+            }
+
+            SetSceneAssetInspection(new SceneInspectionResult(
+                false,
+                Path.GetFileNameWithoutExtension(node.Path),
+                node.Path,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                Array.Empty<SceneEntityInspection>(),
+                new[] { "Scene source is not indexed yet." }));
+            return true;
+        }
+
+        if (!assetDatabase.TryGetAsset(guid, out var sourceAsset))
+        {
+            if (!looksLikeScene)
+            {
+                return false;
+            }
+
+            SetSceneAssetInspection(new SceneInspectionResult(
+                false,
+                Path.GetFileNameWithoutExtension(node.Path),
+                node.Path,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                Array.Empty<SceneEntityInspection>(),
+                new[] { $"Runtime asset database has no record for scene GUID {guid}." }));
+            return true;
+        }
+
+        if (!string.Equals(sourceAsset.AssetType, "Scene", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            var inspection = SceneAssetLoader.InspectScene(
+                assetDatabase,
+                new AssetRef<SceneSourceAsset>(guid, "Scene", sourceAsset.PackageId));
+            SetSceneAssetInspection(inspection);
+        }
+        catch (Exception ex)
+        {
+            SetSceneAssetInspection(new SceneInspectionResult(
+                false,
+                Path.GetFileNameWithoutExtension(sourceAsset.SourcePath),
+                sourceAsset.SourcePath,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                Array.Empty<SceneEntityInspection>(),
+                new[] { ex.Message }));
+        }
+
+        return true;
+    }
+
+    private void SetSceneAssetInspection(SceneInspectionResult inspection)
+    {
+        var rootExpanded = RootNodes.Count > 0 ? RootNodes[0].IsExpanded : true;
+        m_IsShowingSceneAssetInspection = true;
+        ActiveEntityManager = null;
+        m_AllEntities.Clear();
+        m_EntityMap.Clear();
+        m_AllSceneAssetEntities.Clear();
+        m_InspectedSceneAsset = inspection;
+
+        for (int i = 0; i < inspection.Entities.Count; i++)
+        {
+            m_AllSceneAssetEntities.Add(new SceneAssetEntityNodeViewModel(inspection, inspection.Entities[i], i));
+        }
+
+        ApplySceneAssetFilter(rootExpanded);
+    }
+
     public void RefreshHierarchy(EntityManager entityManager)
     {
+        m_IsShowingSceneAssetInspection = false;
+        m_InspectedSceneAsset = null;
+        m_AllSceneAssetEntities.Clear();
         ActiveEntityManager = entityManager;
         
         var collapsedEntityIds = new System.Collections.Generic.HashSet<Entity>();
@@ -451,7 +759,18 @@ internal class HierarchyViewModel : EditorPanelBase
 
     internal void OnUnloaded()
     {
+        if (m_SelectionService != null)
+        {
+            m_SelectionService.SelectionChanged -= OnExternalSelectionChanged;
+        }
+
         m_Disposables.Dispose();
+    }
+
+    private static bool IsKnownSceneExtension(string extension)
+    {
+        return string.Equals(extension, ".arisenscene", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(extension, ".scene", StringComparison.OrdinalIgnoreCase);
     }
 }
 
