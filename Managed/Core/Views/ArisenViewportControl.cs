@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -40,13 +41,16 @@ public partial class ArisenViewportControl : Control
     private RenderOutputPresentationState _presentationState;
     private int _lastRequestedSurfaceWidth;
     private int _lastRequestedSurfaceHeight;
+    private int _outputReadyDispatchQueued;
     
     private readonly Action _updateAction;
+    private readonly Action _outputReadyDispatchAction;
     private readonly Dictionary<IntPtr, ICompositionImportedGpuImage> _imageCache = new();
 
     public ArisenViewportControl()
     {
         _updateAction = OnCompositionUpdate;
+        _outputReadyDispatchAction = DispatchOutputReady;
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -156,6 +160,11 @@ public partial class ArisenViewportControl : Control
             }
 
             _isInitialized = true;
+            if (_renderSubsystem != null)
+            {
+                _renderSubsystem.OutputFrameReady += OnOutputFrameReady;
+            }
+
             RequestSurfaceResize(force: true);
             Dispatcher.UIThread.Post(() =>
             {
@@ -176,6 +185,7 @@ public partial class ArisenViewportControl : Control
         
         if (_renderSubsystem != null)
         {
+            _renderSubsystem.OutputFrameReady -= OnOutputFrameReady;
             _renderSubsystem.UnregisterSurface(this.Handle.Handle);
         }
 
@@ -200,6 +210,33 @@ public partial class ArisenViewportControl : Control
         _lastPresentationSkipLogTime = DateTime.MinValue;
         _lastRequestedSurfaceWidth = 0;
         _lastRequestedSurfaceHeight = 0;
+        Interlocked.Exchange(ref _outputReadyDispatchQueued, 0);
+        _updateQueued = false;
+    }
+
+    private void OnOutputFrameReady(IntPtr host)
+    {
+        if (host != Handle.Handle || !Volatile.Read(ref _isInitialized) ||
+            Interlocked.CompareExchange(ref _outputReadyDispatchQueued, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            Dispatcher.UIThread.Post(_outputReadyDispatchAction, DispatcherPriority.Render);
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _outputReadyDispatchQueued, 0);
+            throw;
+        }
+    }
+
+    private void DispatchOutputReady()
+    {
+        Interlocked.Exchange(ref _outputReadyDispatchQueued, 0);
+        QueueNextFrame();
     }
 
     private void OnCompositionUpdate()
