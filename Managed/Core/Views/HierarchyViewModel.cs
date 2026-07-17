@@ -187,6 +187,8 @@ internal class HierarchyViewModel : EditorPanelBase
     private ObservableCollection<SceneNodeViewModel> m_RootNodes = new();
     private readonly System.Collections.Generic.Dictionary<Entity, EntityNodeViewModel> m_EntityMap = new();
     private readonly CompositeDisposable m_Disposables = new();
+    private readonly IRuntimeSceneService? m_RuntimeSceneService;
+    private readonly IAssetDatabase? m_RuntimeAssetDatabase;
     private SelectionService? m_SelectionService;
     private SceneInspectionResult? m_InspectedSceneAsset;
     private bool m_IsShowingSceneAssetInspection;
@@ -393,6 +395,36 @@ internal class HierarchyViewModel : EditorPanelBase
                 });
             }
         };
+
+        var services = ArisenKernel.Lifecycle.EngineKernel.Instance.Services;
+        if (services.TryGetService<IRuntimeSceneService>(out var runtimeSceneService) &&
+            services.TryGetService<IAssetDatabase>(out var runtimeAssetDatabase))
+        {
+            m_RuntimeSceneService = runtimeSceneService;
+            m_RuntimeAssetDatabase = runtimeAssetDatabase;
+            m_RuntimeSceneService.ActiveSceneChanged += OnRuntimeSceneChanged;
+
+            if (m_RuntimeSceneService.ActiveScene is { } activeScene)
+            {
+                ShowRuntimeScene(activeScene);
+            }
+        }
+    }
+
+    private void OnRuntimeSceneChanged(RuntimeSceneState scene)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => ShowRuntimeScene(scene));
+    }
+
+    private void ShowRuntimeScene(RuntimeSceneState scene)
+    {
+        if (m_RuntimeAssetDatabase == null)
+        {
+            return;
+        }
+
+        var inspection = SceneAssetLoader.InspectScene(m_RuntimeAssetDatabase, scene.Scene);
+        SetSceneAssetInspection(inspection);
     }
 
     public void RefreshMenus(object? context = null)
@@ -762,6 +794,11 @@ internal class HierarchyViewModel : EditorPanelBase
         if (m_SelectionService != null)
         {
             m_SelectionService.SelectionChanged -= OnExternalSelectionChanged;
+        }
+
+        if (m_RuntimeSceneService != null)
+        {
+            m_RuntimeSceneService.ActiveSceneChanged -= OnRuntimeSceneChanged;
         }
 
         m_Disposables.Dispose();

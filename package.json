@@ -17,7 +17,8 @@
       }
     ],
     "requires": [
-      "ArisenKernel.Contracts.IRHIBackend"
+      "ArisenKernel.Contracts.IRHIBackend",
+      "ArisenEngine.Resources.Serialization.IRuntimeSceneService"
     ]
   },
   "dependencies": {
