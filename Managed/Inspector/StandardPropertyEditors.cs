@@ -144,6 +144,79 @@ public class Vector3PropertyEditor : IPropertyEditor
     }
 }
 
+public class Vector4PropertyEditor : IPropertyEditor
+{
+    public bool CanHandle(PropertyItemViewModel property)
+    {
+        var type = property.PropertyType;
+        return type.Name == "Vector4" || type.FullName == "System.Numerics.Vector4";
+    }
+
+    public Control CreateControl(PropertyItemViewModel property)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*") };
+        var controls = new[]
+        {
+            new NumericUpDown { FormatString = "0.###", ShowButtonSpinner = false, Watermark = "X" },
+            new NumericUpDown { Margin = new Avalonia.Thickness(4, 0, 0, 0), FormatString = "0.###", ShowButtonSpinner = false, Watermark = "Y" },
+            new NumericUpDown { Margin = new Avalonia.Thickness(4, 0, 0, 0), FormatString = "0.###", ShowButtonSpinner = false, Watermark = "Z" },
+            new NumericUpDown { Margin = new Avalonia.Thickness(4, 0, 0, 0), FormatString = "0.###", ShowButtonSpinner = false, Watermark = "W" }
+        };
+
+        for (var index = 0; index < controls.Length; index++)
+        {
+            grid.Children.Add(controls[index]);
+            Grid.SetColumn(controls[index], index);
+        }
+
+        var isUpdating = false;
+        void UpdateFromViewModel()
+        {
+            if (property.Value is not System.Numerics.Vector4 value)
+            {
+                return;
+            }
+
+            isUpdating = true;
+            controls[0].Value = (decimal)value.X;
+            controls[1].Value = (decimal)value.Y;
+            controls[2].Value = (decimal)value.Z;
+            controls[3].Value = (decimal)value.W;
+            isUpdating = false;
+        }
+
+        UpdateFromViewModel();
+        property.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(PropertyItemViewModel.Value))
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(UpdateFromViewModel);
+            }
+        };
+
+        var onValueChanged = new EventHandler<NumericUpDownValueChangedEventArgs>((_, _) =>
+        {
+            if (property.IsReadOnly || isUpdating)
+            {
+                return;
+            }
+
+            property.Value = new System.Numerics.Vector4(
+                (float)(controls[0].Value ?? 0m),
+                (float)(controls[1].Value ?? 0m),
+                (float)(controls[2].Value ?? 0m),
+                (float)(controls[3].Value ?? 0m));
+        });
+
+        for (var index = 0; index < controls.Length; index++)
+        {
+            controls[index].ValueChanged += onValueChanged;
+        }
+
+        return grid;
+    }
+}
+
 public class QuaternionPropertyEditor : IPropertyEditor
 {
     public bool CanHandle(PropertyItemViewModel property) 

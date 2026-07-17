@@ -20,10 +20,12 @@ public static class PropertyEditorRegistry
         RegisterEditor(new FlagPropertyEditor());
         RegisterEditor(new StringPropertyEditor());
         RegisterEditor(new Vector3PropertyEditor());
+        RegisterEditor(new Vector4PropertyEditor());
         RegisterEditor(new QuaternionPropertyEditor());
         RegisterEditor(new ColorPropertyEditor());
         RegisterEditor(new ObjectReferencePropertyEditor());
         RegisterEditor(new ActionPropertyEditor());
+        RegisterEditor(new MaterialTexturePropertyEditor());
     }
 
     public static void RegisterEditor(IPropertyEditor editor)

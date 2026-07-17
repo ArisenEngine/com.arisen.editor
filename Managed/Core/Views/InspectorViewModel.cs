@@ -359,6 +359,8 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
     public ArisenEditor.Core.Services.SelectionService? SelectionService { get; set; }
 
     private readonly System.Collections.Generic.List<Type> _allComponentTypes;
+    private Guid m_LastModelReimportGuid;
+    private string m_LastModelReimportStatus = string.Empty;
 
     public InspectorViewModel()
     {
@@ -446,6 +448,11 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         }
 
         if (TargetObject is FileTreeNode sceneFileNode && TryRebuildSceneAssetProperties(sceneFileNode))
+        {
+            return;
+        }
+
+        if (TargetObject is FileTreeNode modelFileNode && TryRebuildModelAssetProperties(modelFileNode))
         {
             return;
         }
@@ -720,27 +727,40 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
 
         var environment = entity.Environment;
         var category = AddCategory("Environment");
+        AddReadOnly(category, "Environment Texture", FormatSceneAssetRef(environment.EnvironmentTexture));
         AddReadOnly(category, "Sky Color", FormatVector3(environment.SkyColor));
         AddReadOnly(category, "Horizon Color", FormatVector3(environment.HorizonColor));
         AddReadOnly(category, "Ground Color", FormatVector3(environment.GroundColor));
         AddReadOnly(category, "Ambient Color", FormatVector3(environment.AmbientColor));
         AddReadOnly(category, "Sky Intensity", environment.SkyIntensity.ToString("0.###"));
         AddReadOnly(category, "Ambient Intensity", environment.AmbientIntensity.ToString("0.###"));
+        AddReadOnly(category, "Exposure", environment.Exposure.ToString("0.###"));
         AddReadOnly(category, "Enabled", environment.Enabled);
     }
 
     private void AddSceneAssetEntityDiagnosticsCategory(SceneEntityInspection entity)
     {
-        if (entity.MeshRenderer == null)
+        if (entity.MeshRenderer == null && entity.Environment == null)
         {
             return;
         }
 
-        var renderer = entity.MeshRenderer;
         var category = AddCategory("Scene Diagnostics");
         var count = 0;
-        AddSceneAssetRefDiagnostic(category, "Mesh", renderer.Mesh, ref count);
-        AddSceneAssetRefDiagnostic(category, "Material", renderer.Material, ref count);
+        if (entity.MeshRenderer != null)
+        {
+            AddSceneAssetRefDiagnostic(category, "Mesh", entity.MeshRenderer.Mesh, ref count);
+            AddSceneAssetRefDiagnostic(category, "Material", entity.MeshRenderer.Material, ref count);
+        }
+
+        if (entity.Environment != null)
+        {
+            AddSceneAssetRefDiagnostic(
+                category,
+                "Environment Texture",
+                entity.Environment.EnvironmentTexture,
+                ref count);
+        }
 
         if (count == 0)
         {
@@ -761,6 +781,88 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
 
         count++;
         AddReadOnly(category, name, assetRef.Diagnostic);
+    }
+
+    private bool TryRebuildModelAssetProperties(FileTreeNode node)
+    {
+        if (node.IsBranch)
+        {
+            return false;
+        }
+
+        var extension = Path.GetExtension(node.Path);
+        bool looksLikeModel = IsKnownModelExtension(extension);
+
+        if (!ArisenKernel.Lifecycle.EngineKernel.Instance.Services.TryGetService<IAssetDatabase>(out var assetDatabase) || assetDatabase == null)
+        {
+            if (!looksLikeModel)
+            {
+                return false;
+            }
+
+            AddDiagnosticsCategory("Runtime asset database service is not available.");
+            return true;
+        }
+
+        var guid = node.AssetGuid;
+        if (guid == Guid.Empty)
+        {
+            guid = ArisenEditor.Core.Services.AssetDatabaseService.Instance.GetGuidFromPath(node.Path);
+        }
+
+        if (guid == Guid.Empty)
+        {
+            if (!looksLikeModel)
+            {
+                return false;
+            }
+
+            AddAssetHeader(node, guid, ModelSourceAssetLoader.ModelAssetType, string.Empty, string.Empty);
+            AddDiagnosticsCategory("Model source is not indexed yet. Save or reimport the asset so a .meta GUID is registered.");
+            return true;
+        }
+
+        if (!assetDatabase.TryGetAsset(guid, out var sourceAsset))
+        {
+            if (!looksLikeModel)
+            {
+                return false;
+            }
+
+            AddAssetHeader(node, guid, ModelSourceAssetLoader.ModelAssetType, string.Empty, string.Empty);
+            AddDiagnosticsCategory($"Runtime asset database has no record for model GUID {guid}.");
+            return true;
+        }
+
+        if (!string.Equals(sourceAsset.AssetType, ModelSourceAssetLoader.ModelAssetType, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        AddAssetHeader(node, guid, sourceAsset.AssetType, sourceAsset.PackageId, sourceAsset.SourcePath);
+
+        try
+        {
+            var model = ModelSourceAssetLoader.LoadSource(sourceAsset);
+            var plan = ModelSourceAssetLoader.CreateGltfPlan(sourceAsset, model);
+            AddModelActions(assetDatabase, sourceAsset);
+            AddModelReimportStatusCategory(guid);
+            AddModelSourceCategory(sourceAsset, model);
+            AddModelImportSettingsCategory(sourceAsset, model);
+            AddModelShaderCategory(model);
+            AddGltfModelSummaryCategory(plan);
+            AddGltfGeneratedChildrenCategory(plan);
+            AddModelGeneratedOutputCategory(sourceAsset, model, plan);
+            AddGltfMaterialPreviewCategory(plan);
+            AddGltfTextureRefCategory(plan);
+            AddGltfWarningsCategory(plan);
+        }
+        catch (Exception ex)
+        {
+            AddDiagnosticsCategory(ex.Message);
+        }
+
+        return true;
     }
 
     private bool TryRebuildMaterialAssetProperties(FileTreeNode node)
@@ -821,17 +923,20 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         }
 
         AddAssetHeader(node, guid, sourceAsset.AssetType, sourceAsset.PackageId, sourceAsset.SourcePath);
-        AddMaterialActions(assetDatabase, sourceAsset);
+        var canEdit = MaterialAssetEditPolicy.CanEdit(sourceAsset, out var editDiagnostic);
+        AddMaterialActions(assetDatabase, sourceAsset, editDiagnostic);
 
         try
         {
-            var material = MaterialAssetLoader.LoadSource(assetDatabase, guid);
+            var inspection = MaterialAssetLoader.InspectSource(assetDatabase, guid);
+            var material = inspection.Asset;
             AddShaderCategory(material.Shader, assetDatabase);
-            AddTextureCategory(material);
-            AddScalarCategory(material);
-            AddVectorCategory(material);
+            var textureOptions = BuildMaterialTextureOptions(assetDatabase);
+            AddTextureCategory(material, assetDatabase, sourceAsset, textureOptions, !canEdit);
+            AddScalarCategory(material, assetDatabase, sourceAsset, !canEdit);
+            AddVectorCategory(material, assetDatabase, sourceAsset, !canEdit);
             AddRenderStateCategory(material.RenderState);
-            AddDiagnosticsCategory("Material contract validation passed.");
+            AddMaterialDiagnostics(inspection);
         }
         catch (Exception ex)
         {
@@ -1026,9 +1131,49 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         AddReadOnly(category, "Source", string.IsNullOrWhiteSpace(sourcePath) ? node.Path : sourcePath);
     }
 
-    private void AddMaterialActions(IAssetDatabase assetDatabase, AssetRecord sourceAsset)
+    private void AddModelActions(IAssetDatabase assetDatabase, AssetRecord sourceAsset)
     {
         var category = AddCategory("Workflow");
+        ICommand reimportCommand = ReactiveCommand.CreateFromTask(async () =>
+        {
+            try
+            {
+                var result = await System.Threading.Tasks.Task.Run(() => ModelSourceReimporter.Reimport(sourceAsset));
+                NotifyModelReimportChanges(assetDatabase, sourceAsset, result);
+                m_LastModelReimportGuid = sourceAsset.Guid;
+                m_LastModelReimportStatus =
+                    $"Reimported {result.GeneratedChildGuids.Count} generated child asset(s). Orphans: {result.OrphanedGeneratedChildren.Count}. Output: {result.OutputRoot}";
+                EditorLog.Info($"[ModelReimport] {m_LastModelReimportStatus}");
+            }
+            catch (Exception ex)
+            {
+                m_LastModelReimportGuid = sourceAsset.Guid;
+                m_LastModelReimportStatus = $"Reimport failed: {ex.Message}";
+                EditorLog.Error($"[ModelReimport] Failed to reimport '{sourceAsset.SourcePath}'.", ex);
+            }
+            finally
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(
+                    RebuildProperties,
+                    Avalonia.Threading.DispatcherPriority.Background);
+            }
+        });
+
+        category.Properties.Add(new ActionPropertyItemViewModel(
+            "Reimport",
+            "Reimport",
+            reimportCommand,
+            category.CategoryName,
+            "Regenerate model scene, mesh, material, and texture children under the configured package/workspace Assets output root."));
+    }
+
+    private void AddMaterialActions(
+        IAssetDatabase assetDatabase,
+        AssetRecord sourceAsset,
+        string editDiagnostic)
+    {
+        var category = AddCategory("Workflow");
+        AddReadOnly(category, "Source Editing", editDiagnostic);
         ICommand reloadCommand = ReactiveCommand.Create(() =>
         {
             try
@@ -1159,6 +1304,19 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             "Invalidate cooked mesh data, recook the mesh asset, and notify runtime systems to reload it."));
     }
 
+    private static void NotifyModelReimportChanges(
+        IAssetDatabase assetDatabase,
+        AssetRecord sourceAsset,
+        ModelSourceReimportResult result)
+    {
+        if (assetDatabase is ArisenEngine.Core.Assets.AssetDatabase runtimeDatabase)
+        {
+            runtimeDatabase.RefreshDirectory(result.OutputRoot, sourceAsset.PackageId);
+        }
+
+        ModelSourceReimporter.InvalidateCookedOutputs(assetDatabase, sourceAsset, result);
+    }
+
     private void AddStandaloneShaderInspection(IAssetDatabase assetDatabase, AssetRecord sourceAsset)
     {
         if (ShaderLabSource.IsShaderLabPath(sourceAsset.SourcePath))
@@ -1246,6 +1404,89 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
                 category,
                 $"Submesh {i}",
                 $"FirstIndex {submesh.FirstIndex} | IndexCount {submesh.IndexCount} | VertexOffset {submesh.VertexOffset} | MaterialSlot {submesh.MaterialSlot}");
+        }
+    }
+
+    private void AddModelSourceCategory(AssetRecord sourceAsset, ModelSourceDescriptor model)
+    {
+        var category = AddCategory("Model Source");
+        AddReadOnly(category, "Name", model.Name);
+        AddReadOnly(category, "Model Guid", sourceAsset.Guid);
+        AddReadOnly(category, "Package", sourceAsset.PackageId);
+        AddReadOnly(category, "Source Path", model.SourcePath);
+        AddReadOnly(category, "Resolved Source", model.ResolvedSourcePath);
+        AddReadOnly(category, "Source Format", model.SourceFormat);
+    }
+
+    private void AddModelImportSettingsCategory(AssetRecord sourceAsset, ModelSourceDescriptor model)
+    {
+        var category = AddCategory("Model Import Settings");
+        AddReadOnly(category, "Output Root", model.Import.OutputRoot);
+        AddReadOnly(category, "Resolved Output Root", ModelSourceAssetLoader.ResolveOutputRoot(sourceAsset.SourcePath, model.Import.OutputRoot));
+        AddReadOnly(category, "Scene Index", model.Import.SceneIndex);
+        AddReadOnly(category, "Unit Scale", model.Import.UnitScale.ToString("0.###"));
+        AddReadOnly(category, "Root Position", FormatVector3(model.Import.RootTransform.Position));
+        AddReadOnly(category, "Root Rotation", FormatQuaternion(model.Import.RootTransform.Rotation));
+        AddReadOnly(category, "Root Scale", FormatVector3(model.Import.RootTransform.Scale));
+        AddReadOnly(category, "Emit Textures", model.Import.EmitTextures);
+    }
+
+    private void AddModelShaderCategory(ModelSourceDescriptor model)
+    {
+        var category = AddCategory("Generated Material Shader");
+        AddReadOnly(category, "Shader", string.IsNullOrWhiteSpace(model.Shader.Name) ? "<unnamed>" : model.Shader.Name);
+        AddReadOnly(category, "Guid", model.Shader.Guid);
+    }
+
+    private void AddModelReimportStatusCategory(Guid modelGuid)
+    {
+        if (m_LastModelReimportGuid != modelGuid || string.IsNullOrWhiteSpace(m_LastModelReimportStatus))
+        {
+            return;
+        }
+
+        var category = AddCategory("Model Reimport Status");
+        AddReadOnly(category, "Last Result", m_LastModelReimportStatus);
+    }
+
+    private void AddModelGeneratedOutputCategory(
+        AssetRecord sourceAsset,
+        ModelSourceDescriptor model,
+        GltfModelImportPlan plan)
+    {
+        var category = AddCategory("Generated Output");
+        try
+        {
+            var inspection = ModelSourceReimporter.InspectGeneratedOutput(sourceAsset, model, plan);
+            AddReadOnly(category, "Output Root", inspection.OutputRoot);
+            AddReadOnly(category, "Orphans", inspection.OrphanedGeneratedChildren.Count);
+            AddReadOnly(category, "Foreign", inspection.ForeignGeneratedChildren.Count);
+            if (inspection.OrphanedGeneratedChildren.Count == 0 &&
+                inspection.ForeignGeneratedChildren.Count == 0)
+            {
+                AddReadOnly(category, "Status", "Generated metadata matches the current import plan.");
+                return;
+            }
+
+            for (int i = 0; i < inspection.OrphanedGeneratedChildren.Count; i++)
+            {
+                AddReadOnly(
+                    category,
+                    $"Orphan {i + 1}",
+                    FormatGeneratedOutputDiagnostic(inspection.OrphanedGeneratedChildren[i]));
+            }
+
+            for (int i = 0; i < inspection.ForeignGeneratedChildren.Count; i++)
+            {
+                AddReadOnly(
+                    category,
+                    $"Foreign {i + 1}",
+                    FormatGeneratedOutputDiagnostic(inspection.ForeignGeneratedChildren[i]));
+            }
+        }
+        catch (Exception ex)
+        {
+            AddReadOnly(category, "Status", ex.Message);
         }
     }
 
@@ -1395,7 +1636,7 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             AddReadOnly(
                 category,
                 entity.Name,
-                $"Sky {FormatVector3(environment.SkyColor)} | Horizon {FormatVector3(environment.HorizonColor)} | Ground {FormatVector3(environment.GroundColor)} | Ambient {FormatVector3(environment.AmbientColor)} | SkyIntensity {environment.SkyIntensity:0.###} | AmbientIntensity {environment.AmbientIntensity:0.###} | Enabled {environment.Enabled}");
+                $"Texture {FormatSceneAssetRef(environment.EnvironmentTexture)} | Sky {FormatVector3(environment.SkyColor)} | Horizon {FormatVector3(environment.HorizonColor)} | Ground {FormatVector3(environment.GroundColor)} | Ambient {FormatVector3(environment.AmbientColor)} | SkyIntensity {environment.SkyIntensity:0.###} | AmbientIntensity {environment.AmbientIntensity:0.###} | Exposure {environment.Exposure:0.###} | Enabled {environment.Enabled}");
         }
 
         if (count == 0)
@@ -1556,7 +1797,12 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         }
     }
 
-    private void AddTextureCategory(MaterialAsset material)
+    private void AddTextureCategory(
+        MaterialAsset material,
+        IAssetDatabase assetDatabase,
+        AssetRecord sourceAsset,
+        IReadOnlyList<MaterialTextureAssetOption> textureOptions,
+        bool isReadOnly)
     {
         var category = AddCategory("Texture2D Refs");
         if (material.Texture2DRefs.Count == 0)
@@ -1568,14 +1814,20 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         for (int i = 0; i < material.Texture2DRefs.Count; i++)
         {
             var texture = material.Texture2DRefs[i];
-            AddReadOnly(
-                category,
-                texture.Name,
-                $"{texture.Texture.Name} | {texture.Texture.Guid} | Slot {texture.Slot}");
+            category.Properties.Add(new MaterialTexturePropertyViewModel(
+                assetDatabase,
+                sourceAsset,
+                texture,
+                textureOptions,
+                isReadOnly));
         }
     }
 
-    private void AddScalarCategory(MaterialAsset material)
+    private void AddScalarCategory(
+        MaterialAsset material,
+        IAssetDatabase assetDatabase,
+        AssetRecord sourceAsset,
+        bool isReadOnly)
     {
         var category = AddCategory("Scalar Properties");
         if (material.ScalarProperties.Count == 0)
@@ -1587,11 +1839,19 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         for (int i = 0; i < material.ScalarProperties.Count; i++)
         {
             var property = material.ScalarProperties[i];
-            AddReadOnly(category, property.Name, property.Value.ToString("0.###"));
+            category.Properties.Add(new MaterialScalarPropertyViewModel(
+                assetDatabase,
+                sourceAsset,
+                property,
+                isReadOnly));
         }
     }
 
-    private void AddVectorCategory(MaterialAsset material)
+    private void AddVectorCategory(
+        MaterialAsset material,
+        IAssetDatabase assetDatabase,
+        AssetRecord sourceAsset,
+        bool isReadOnly)
     {
         var category = AddCategory("Vector4 Properties");
         if (material.Vector4Properties.Count == 0)
@@ -1603,9 +1863,89 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         for (int i = 0; i < material.Vector4Properties.Count; i++)
         {
             var property = material.Vector4Properties[i];
-            var value = property.Value;
-            AddReadOnly(category, property.Name, $"{value.X:0.###}, {value.Y:0.###}, {value.Z:0.###}, {value.W:0.###}");
+            category.Properties.Add(new MaterialVector4PropertyViewModel(
+                assetDatabase,
+                sourceAsset,
+                property,
+                isReadOnly));
         }
+    }
+
+    private void AddMaterialDiagnostics(MaterialAssetInspection inspection)
+    {
+        var category = AddCategory("Diagnostics");
+        if (inspection.IsShaderContractValid)
+        {
+            AddReadOnly(category, "Status", "Material contract validation passed.");
+            return;
+        }
+
+        AddReadOnly(
+            category,
+            "Status",
+            $"Material shader contract has {inspection.ShaderContractDiagnostics.Count} missing binding(s).");
+        for (var index = 0; index < inspection.ShaderContractDiagnostics.Count; index++)
+        {
+            var diagnostic = inspection.ShaderContractDiagnostics[index];
+            AddReadOnly(
+                category,
+                $"{diagnostic.BindingKind}: {diagnostic.BindingName}",
+                diagnostic.Message);
+        }
+    }
+
+    private static IReadOnlyList<MaterialTextureAssetOption> BuildMaterialTextureOptions(
+        IAssetDatabase assetDatabase)
+    {
+        var options = new List<MaterialTextureAssetOption>();
+        foreach (var asset in assetDatabase.Assets)
+        {
+            if (!string.Equals(asset.AssetType, "Texture2D", StringComparison.OrdinalIgnoreCase) ||
+                !TryResolveTextureSourceFormat(asset.SourcePath, out var sourceFormat))
+            {
+                continue;
+            }
+
+            var fileName = Path.GetFileNameWithoutExtension(asset.SourcePath);
+            var logicalName = string.IsNullOrWhiteSpace(asset.PackageId)
+                ? fileName
+                : $"{asset.PackageId}/{fileName}";
+            var displayName = string.IsNullOrWhiteSpace(asset.PackageId)
+                ? Path.GetFileName(asset.SourcePath)
+                : $"{Path.GetFileName(asset.SourcePath)} | {asset.PackageId}";
+            options.Add(new MaterialTextureAssetOption(
+                new MaterialTextureSourceReference(asset.Guid, logicalName, sourceFormat),
+                displayName));
+        }
+
+        options.Sort((left, right) => string.Compare(
+            left.DisplayName,
+            right.DisplayName,
+            StringComparison.OrdinalIgnoreCase));
+        return options;
+    }
+
+    private static bool TryResolveTextureSourceFormat(
+        string sourcePath,
+        out Texture2DSourceFormat sourceFormat)
+    {
+        var extension = Path.GetExtension(sourcePath);
+        if (string.Equals(extension, ".ppm", StringComparison.OrdinalIgnoreCase))
+        {
+            sourceFormat = Texture2DSourceFormat.PpmP3;
+            return true;
+        }
+
+        if (string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            sourceFormat = Texture2DSourceFormat.ImageFile;
+            return true;
+        }
+
+        sourceFormat = default;
+        return false;
     }
 
     private void AddRenderStateCategory(MaterialRenderState renderState)
@@ -1670,7 +2010,7 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             AddReadOnly(
                 category,
                 $"{child.Kind} {i}",
-                $"{child.Key} | {child.Metadata.AssetType} | {child.Metadata.Guid}");
+                FormatGeneratedChild(child));
         }
     }
 
@@ -1690,7 +2030,7 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             AddReadOnly(
                 category,
                 name,
-                $"Guid {material.Guid} | BaseColor {FormatVector4(material.BaseColorFactor)} | Metallic {material.MetallicFactor:0.###} | Roughness {material.RoughnessFactor:0.###}");
+                $"Guid {material.Guid} | BaseColor {FormatVector4(material.BaseColorFactor)} | Metallic {material.MetallicFactor:0.###} | Roughness {material.RoughnessFactor:0.###} | Occlusion {material.OcclusionStrength:0.###} | Alpha {material.AlphaMode} ({material.AlphaCutoff:0.###})");
         }
     }
 
@@ -1710,6 +2050,24 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             if (material.NormalTexture != null)
             {
                 AddReadOnly(category, $"Material {i} Normal", FormatGltfTextureRef(material.NormalTexture));
+                count++;
+            }
+
+            if (material.EmissiveTexture != null)
+            {
+                AddReadOnly(category, $"Material {i} Emissive", FormatGltfTextureRef(material.EmissiveTexture));
+                count++;
+            }
+
+            if (material.MetallicRoughnessTexture != null)
+            {
+                AddReadOnly(category, $"Material {i} Metallic/Roughness", FormatGltfTextureRef(material.MetallicRoughnessTexture));
+                count++;
+            }
+
+            if (material.OcclusionTexture != null)
+            {
+                AddReadOnly(category, $"Material {i} Occlusion", FormatGltfTextureRef(material.OcclusionTexture));
                 count++;
             }
         }
@@ -1855,6 +2213,12 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
                string.Equals(extension, ".gltf", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(extension, ".glb", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(extension, ".fbx", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsKnownModelExtension(string extension)
+    {
+        return string.Equals(extension, ".arismodel", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(extension, ".model", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsKnownSceneExtension(string extension)
@@ -2025,7 +2389,25 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             source = "<unresolved>";
         }
 
-        return $"Texture {textureRef.TextureIndex} | Image {textureRef.ImageIndex} | {source}";
+        var sampler = textureRef.Sampler;
+        var transform = textureRef.Transform;
+        return $"Texture {textureRef.TextureIndex} | Image {textureRef.ImageIndex} | {source} | Filter {sampler.MinFilter}/{sampler.MagFilter}/{sampler.MipmapMode} | Wrap {sampler.WrapU}/{sampler.WrapV} | UV {transform.TexCoord} | Offset ({transform.Offset.X:0.###}, {transform.Offset.Y:0.###}) | Scale ({transform.Scale.X:0.###}, {transform.Scale.Y:0.###}) | Rotation {transform.Rotation:0.###}";
+    }
+
+    private static string FormatGeneratedChild(GltfGeneratedChildAsset child)
+    {
+        var generated = child.Metadata.Generated;
+        if (generated == null)
+        {
+            return $"{child.Key} | {child.Metadata.AssetType} | {child.Metadata.Guid}";
+        }
+
+        return $"{child.Key} | {child.Metadata.AssetType} | {child.Metadata.Guid} | {generated.GeneratedByImporter} | Source {generated.SourceGuid}";
+    }
+
+    private static string FormatGeneratedOutputDiagnostic(ModelGeneratedOutputDiagnostic diagnostic)
+    {
+        return $"{diagnostic.ChildKind}:{diagnostic.ChildKey} | {diagnostic.AssetType} | {diagnostic.Guid} | Source {diagnostic.SourceGuid} | {diagnostic.MetaPath} | {diagnostic.Message}";
     }
 
     private static int CountGltfTextureRefs(GltfModelImportPlan plan)
@@ -2039,6 +2421,21 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             }
 
             if (plan.Materials[i].NormalTexture != null)
+            {
+                count++;
+            }
+
+            if (plan.Materials[i].EmissiveTexture != null)
+            {
+                count++;
+            }
+
+            if (plan.Materials[i].MetallicRoughnessTexture != null)
+            {
+                count++;
+            }
+
+            if (plan.Materials[i].OcclusionTexture != null)
             {
                 count++;
             }
