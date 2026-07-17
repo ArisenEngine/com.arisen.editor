@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using ArisenEditor.Core.Assets;
 using ArisenEngine.Core.Assets;
 using ArisenEditor.Core.Commands;
 using ArisenEditor.Core.Services;
@@ -638,6 +639,14 @@ internal class HierarchyViewModel : EditorPanelBase
 
     private void SetSceneAssetInspection(SceneInspectionResult inspection)
     {
+        var selectedSceneEntity =
+            m_SelectionService?.CurrentSelection as SceneAssetEntityNodeViewModel ??
+            SelectedItem as SceneAssetEntityNodeViewModel;
+        bool restoreSceneEntitySelection = selectedSceneEntity != null &&
+            IsSameSceneSource(selectedSceneEntity.SourcePath, inspection.SourcePath);
+        int selectedEntityIndex = restoreSceneEntitySelection
+            ? selectedSceneEntity!.EntityIndex
+            : -1;
         var rootExpanded = RootNodes.Count > 0 ? RootNodes[0].IsExpanded : true;
         m_IsShowingSceneAssetInspection = true;
         ActiveEntityManager = null;
@@ -646,12 +655,36 @@ internal class HierarchyViewModel : EditorPanelBase
         m_AllSceneAssetEntities.Clear();
         m_InspectedSceneAsset = inspection;
 
+        SceneAssetEntityNodeViewModel? replacementSelection = null;
         for (int i = 0; i < inspection.Entities.Count; i++)
         {
-            m_AllSceneAssetEntities.Add(new SceneAssetEntityNodeViewModel(inspection, inspection.Entities[i], i));
+            var entityNode = new SceneAssetEntityNodeViewModel(inspection, inspection.Entities[i], i);
+            m_AllSceneAssetEntities.Add(entityNode);
+            if (i == selectedEntityIndex)
+            {
+                replacementSelection = entityNode;
+            }
         }
 
         ApplySceneAssetFilter(rootExpanded);
+
+        if (restoreSceneEntitySelection)
+        {
+            m_IsApplyingExternalSelection = true;
+            try
+            {
+                SelectedItem = replacementSelection;
+            }
+            finally
+            {
+                m_IsApplyingExternalSelection = false;
+            }
+
+            if (m_SelectionService != null)
+            {
+                m_SelectionService.CurrentSelection = replacementSelection;
+            }
+        }
     }
 
     public void RefreshHierarchy(EntityManager entityManager)
@@ -808,6 +841,16 @@ internal class HierarchyViewModel : EditorPanelBase
     {
         return string.Equals(extension, ".arisenscene", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(extension, ".scene", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSameSceneSource(string left, string right)
+    {
+        return !string.IsNullOrWhiteSpace(left) &&
+               !string.IsNullOrWhiteSpace(right) &&
+               string.Equals(
+                   AssetPathPolicy.NormalizeFullPath(left),
+                   AssetPathPolicy.NormalizeFullPath(right),
+                   StringComparison.OrdinalIgnoreCase);
     }
 }
 

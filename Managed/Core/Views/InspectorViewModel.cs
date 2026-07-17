@@ -310,7 +310,7 @@ public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
                 m_Node.Name,
                 oldTransform,
                 newTransform,
-                m_Node.SetTransform);
+                OnTransformApplied);
 
             try
             {
@@ -323,6 +323,29 @@ public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
                 EditorLog.Error($"[SceneAssetInspector] Failed to edit transform for '{m_Node.Name}'.", ex);
             }
         }
+    }
+
+    private void OnTransformApplied(SceneTransformInspection transform)
+    {
+        m_Node.SetTransform(transform);
+
+        var services = ArisenKernel.Lifecycle.EngineKernel.Instance.Services;
+        if (!services.TryGetService<IRuntimeSceneService>(out var sceneService) || sceneService == null)
+        {
+            return;
+        }
+
+        var activeScene = sceneService.ActiveScene;
+        if (activeScene == null ||
+            !string.Equals(
+                AssetPathPolicy.NormalizeFullPath(activeScene.SourcePath),
+                AssetPathPolicy.NormalizeFullPath(m_Node.SourcePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        sceneService.RequestSceneLoad(activeScene.Scene);
     }
 
     private static bool TryGetVector3(object value, out Vector3 result)
