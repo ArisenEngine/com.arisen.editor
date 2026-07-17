@@ -278,7 +278,7 @@ public class AssetImporter : IDisposable
             _packageId));
     }
 
-    private void ProcessRenamedFile(string oldFullPath, string newFullPath)
+    internal void ProcessRenamedFile(string oldFullPath, string newFullPath)
     {
         if (!AssetPathPolicy.IsUnderAssetsRoot(newFullPath, _assetsDirectory) ||
             (!string.IsNullOrWhiteSpace(oldFullPath) && !AssetPathPolicy.IsUnderAssetsRoot(oldFullPath, _assetsDirectory)))
@@ -303,17 +303,29 @@ public class AssetImporter : IDisposable
             guid = existingGuid;
         }
 
-        if (File.Exists(oldMetaPath) && !File.Exists(newMetaPath))
+        if (File.Exists(oldMetaPath) &&
+            !string.Equals(
+                Path.GetFullPath(oldMetaPath),
+                Path.GetFullPath(newMetaPath),
+                StringComparison.OrdinalIgnoreCase))
         {
-            try { File.Move(oldMetaPath, newMetaPath); } catch { }
+            File.Move(oldMetaPath, newMetaPath, overwrite: true);
         }
 
-        if (guid == Guid.Empty && File.Exists(newMetaPath))
+        if (File.Exists(newMetaPath))
         {
             var meta = SerializationUtil.Deserialize<AssetMetadata>(newMetaPath);
-            guid = meta.Guid;
+            if (guid == Guid.Empty)
+            {
+                guid = meta.Guid;
+            }
+            else if (meta.Guid != guid)
+            {
+                meta.Guid = guid;
+                SerializationUtil.Serialize(meta, newMetaPath);
+            }
         }
-        else if (guid != Guid.Empty && !File.Exists(newMetaPath))
+        else if (guid != Guid.Empty)
         {
             SerializationUtil.Serialize(new AssetMetadata { Guid = guid }, newMetaPath);
         }
@@ -321,9 +333,20 @@ public class AssetImporter : IDisposable
         AssetDatabase.Instance.RemoveAssetByPath(oldRelativePath);
         ProcessFile(newFullPath, publishEvent: false, RuntimeAssetChangeKind.Renamed, throwOnFailure: true);
 
-        if (guid == Guid.Empty && AssetDatabase.Instance.TryGetGuid(newRelativePath, out var newGuid))
+        if (!AssetDatabase.Instance.TryGetGuid(newRelativePath, out var registeredGuid))
         {
-            guid = newGuid;
+            throw new InvalidOperationException(
+                $"[AssetImporter] Renamed asset '{newFullPath}' was not registered at its destination path.");
+        }
+
+        if (guid == Guid.Empty)
+        {
+            guid = registeredGuid;
+        }
+        else if (registeredGuid != guid)
+        {
+            throw new InvalidOperationException(
+                $"[AssetImporter] Renamed asset '{newFullPath}' registered GUID '{registeredGuid}', expected preserved GUID '{guid}'.");
         }
 
         PublishChange(new RuntimeAssetChangeEvent(
@@ -402,6 +425,8 @@ public class AssetImporter : IDisposable
             ".jpg" => "Texture2D",
             ".jpeg" => "Texture2D",
             ".ppm" => "Texture2D",
+            ".hdr" => "Texture2D",
+            ".arienvironment" => "EnvironmentTexture",
             ".arismaterial" => "Material",
             ".material" => "Material",
             ".arismodel" => "Model",
@@ -427,6 +452,8 @@ public class AssetImporter : IDisposable
             ".shader" => "ShaderLab",
             ".ppm" => "PpmTextureImporter",
             ".png" or ".jpg" or ".jpeg" => "ImageTextureImporter",
+            ".hdr" => "HdrTextureImporter",
+            ".arienvironment" => "ArisenEnvironmentTextureImporter",
             ".arismaterial" or ".material" => "ArisenMaterialImporter",
             ".arismodel" or ".model" => "ArisenModelImporter",
             ".arisenscene" or ".scene" => "ArisenSceneImporter",
