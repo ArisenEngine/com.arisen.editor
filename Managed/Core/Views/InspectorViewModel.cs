@@ -2,16 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Windows.Input;
 using ArisenEditor.Core.Assets;
 using ArisenEditor.Core.Commands;
 using ArisenEditor.Core.Services;
 using ArisenEngine.Core.Assets;
 using ArisenEditorFramework.Inspector;
-using ArisenEngine.Core.ECS;
 using ArisenEngine.Rendering;
 using ArisenEngine.Rendering.Resources;
 using ArisenEngine.Resources.Serialization;
@@ -20,240 +16,22 @@ using ICommandManager = ArisenEngine.Core.Automation.ICommandManager;
 
 namespace ArisenEditor.ViewModels;
 
-/// <summary>
-/// A specialized ECS-aware property item that knows how to read/write fields directly 
-/// back to the ComponentPool memory using offsets, avoiding boxing/unboxing.
-/// </summary>
-public unsafe class ECSFieldPropertyViewModel : PropertyItemViewModel
-{
-    private readonly Entity _entity;
-    private readonly IComponentPool _pool;
-    private readonly int _fieldOffset;
-
-    public override object? Value
-    {
-        get
-        {
-            // For reading to the UI, some boxing is inevitable as Avalonia expects objects,
-            // but we minimize it by avoiding PropertyInfo.GetValue when possible.
-            var ptr = _pool.GetAddress(_entity);
-            if (ptr == IntPtr.Zero) return null;
-
-            // Use reflection-based fallback for the GET (UI-bound) to handle all types easily.
-            // Boxing on GET for the UI is acceptable; boxing on SET/HOT-PATH is not.
-            var component = _pool.GetBoxed(_entity);
-            return _propertyInfo?.GetValue(component) ?? _fieldInfo?.GetValue(component);
-        }
-        set
-        {
-            if (IsReadOnly) return;
-
-            var ptr = _pool.GetAddress(_entity);
-            if (ptr == IntPtr.Zero) return;
-
-            object oldComponent = _pool.GetBoxed(_entity);
-            object newComponent = _pool.GetBoxed(_entity);
-
-            object? converted = TryConvert(value, PropertyType);
-            
-            if (converted is string strValue)
-            {
-                if (PropertyType == typeof(System.Numerics.Vector3))
-                {
-                    converted = TryParseVector3(strValue);
-                    if (converted == null) return;
-                }
-                else if (PropertyType == typeof(System.Numerics.Quaternion))
-                {
-                    converted = TryParseQuaternion(strValue);
-                    if (converted == null) return;
-                }
-            }
-            
-            if (converted == null && value != null) return;
-
-            _fieldInfo?.SetValue(newComponent, converted);
-
-            var cmdMgr = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ArisenEngine.Core.Automation.ICommandManager>();
-            var cmd = new ArisenEditor.Core.Commands.ModifyComponentCommand(_entity, _pool, oldComponent, newComponent);
-            cmdMgr?.Execute(cmd);
-            
-            this.RaisePropertyChanged(nameof(Value));
-        }
-    }
-
-    public void Refresh() => this.RaisePropertyChanged(nameof(Value));
-
-    private readonly FieldInfo? _fieldInfo;
-
-    public ECSFieldPropertyViewModel(Entity entity, IComponentPool pool, FieldInfo fieldInfo) 
-        : base(pool.GetBoxed(entity), fieldInfo.Name, fieldInfo.FieldType, false, pool.GetComponentType().Name)
-    {
-        _entity = entity;
-        _pool = pool;
-        _fieldInfo = fieldInfo;
-        
-        // Calculate the native offset of the field within the struct
-        _fieldOffset = (int)Marshal.OffsetOf(pool.GetComponentType(), fieldInfo.Name);
-
-        ApplyAttributes(fieldInfo);
-    }
-    
-    private static object? TryParseVector3(string input)
-    {
-        // Vector3.ToString() format: "<1, 2, 3>"
-        var clean = input.Trim('<', '>', ' ', '\t');
-        var parts = clean.Split(',');
-        if (parts.Length == 3 && 
-            float.TryParse(parts[0], out float x) &&
-            float.TryParse(parts[1], out float y) &&
-            float.TryParse(parts[2], out float z))
-        {
-            return new System.Numerics.Vector3(x, y, z);
-        }
-        return null;
-    }
-
-    private static object? TryParseQuaternion(string input)
-    {
-        // Quaternion depends on standard ToString output, usually "{X:1 Y:2 Z:3 W:4}" or "<1, 2, 3, 4>"
-        var clean = input.Replace("{", "").Replace("}", "").Replace("<", "").Replace(">", "").Trim();
-        var parts = clean.Split(new[] { ' ', ',', ':' }, StringSplitOptions.RemoveEmptyEntries);
-        
-        // Extract 4 floats from whatever tokens are found
-        var values = new System.Collections.Generic.List<float>();
-        foreach (var p in parts)
-        {
-            if (float.TryParse(p, out float v))
-                values.Add(v);
-        }
-        
-        if (values.Count >= 4)
-        {
-            return new System.Numerics.Quaternion(values[0], values[1], values[2], values[3]);
-        }
-        return null;
-    }
-}
-
-/// <summary>
-/// A specialized ECS-aware property item that knows how to read/write properties
-/// back to the ComponentPool memory. Properties require boxing/unboxing since they invoke method calls.
-/// </summary>
-public class ECSPropertyViewModel : PropertyItemViewModel
-{
-    private readonly Entity _entity;
-    private readonly IComponentPool _pool;
-    private readonly PropertyInfo _propInfo;
-
-    public ECSPropertyViewModel(Entity entity, IComponentPool pool, PropertyInfo propInfo) 
-        : base(pool.GetBoxed(entity), propInfo.Name, propInfo.PropertyType, !propInfo.CanWrite, pool.GetComponentType().Name)
-    {
-        _entity = entity;
-        _pool = pool;
-        _propInfo = propInfo;
-        
-        ApplyAttributes(propInfo);
-    }
-    
-    public override object? Value
-    {
-        get
-        {
-            var ptr = _pool.GetAddress(_entity);
-            if (ptr == IntPtr.Zero) return null;
-
-            var component = _pool.GetBoxed(_entity);
-            return _propInfo.GetValue(component);
-        }
-        set
-        {
-            if (IsReadOnly) return;
-
-            var ptr = _pool.GetAddress(_entity);
-            if (ptr == IntPtr.Zero) return;
-
-            object oldComponent = _pool.GetBoxed(_entity);
-            object newComponent = _pool.GetBoxed(_entity);
-
-            object? converted = TryConvert(value, PropertyType);
-            
-            if (converted is string strValue)
-            {
-                if (PropertyType == typeof(System.Numerics.Vector3))
-                {
-                    converted = TryParseVector3(strValue);
-                    if (converted == null) return;
-                }
-                else if (PropertyType == typeof(System.Numerics.Quaternion))
-                {
-                    converted = TryParseQuaternion(strValue);
-                    if (converted == null) return;
-                }
-            }
-            
-            if (converted == null && value != null) return;
-
-            _propInfo.SetValue(newComponent, converted);
-            
-            var cmdMgr = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ArisenEngine.Core.Automation.ICommandManager>();
-            var cmd = new ArisenEditor.Core.Commands.ModifyComponentCommand(_entity, _pool, oldComponent, newComponent);
-            cmdMgr?.Execute(cmd);
-            
-            this.RaisePropertyChanged(nameof(Value));
-        }
-    }
-    
-    public void Refresh() => this.RaisePropertyChanged(nameof(Value));
-    
-    private static object? TryParseVector3(string input)
-    {
-        var clean = input.Trim('<', '>', ' ', '\t');
-        var parts = clean.Split(',');
-        if (parts.Length == 3 && 
-            float.TryParse(parts[0], out float x) &&
-            float.TryParse(parts[1], out float y) &&
-            float.TryParse(parts[2], out float z))
-        {
-            return new System.Numerics.Vector3(x, y, z);
-        }
-        return null;
-    }
-
-    private static object? TryParseQuaternion(string input)
-    {
-        var clean = input.Replace("{", "").Replace("}", "").Replace("<", "").Replace(">", "").Trim();
-        var parts = clean.Split(new[] { ' ', ',', ':' }, StringSplitOptions.RemoveEmptyEntries);
-        
-        var values = new System.Collections.Generic.List<float>();
-        foreach (var p in parts)
-        {
-            if (float.TryParse(p, out float v))
-                values.Add(v);
-        }
-        
-        if (values.Count >= 4)
-        {
-            return new System.Numerics.Quaternion(values[0], values[1], values[2], values[3]);
-        }
-        return null;
-    }
-}
-
-public enum SceneTransformProperty
+internal enum SceneTransformProperty
 {
     Position,
     Rotation,
     Scale
 }
 
-public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
+internal sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
 {
     private readonly SceneAssetEntityNodeViewModel m_Node;
+    private readonly IEditorSceneDocumentService? m_DocumentService;
     private readonly SceneTransformProperty m_Property;
 
     public SceneTransformPropertyViewModel(
         SceneAssetEntityNodeViewModel node,
+        IEditorSceneDocumentService? documentService,
         SceneTransformProperty property,
         bool isReadOnly)
         : base(
@@ -264,6 +42,7 @@ public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
             "Transform")
     {
         m_Node = node;
+        m_DocumentService = documentService;
         m_Property = property;
     }
 
@@ -282,7 +61,7 @@ public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
         }
         set
         {
-            if (IsReadOnly || value == null)
+            if (IsReadOnly || m_DocumentService == null || value == null)
             {
                 return;
             }
@@ -305,7 +84,7 @@ public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
             }
 
             var command = new ModifySceneAssetTransformCommand(
-                m_Node.SourcePath,
+                m_DocumentService,
                 m_Node.EntityIndex,
                 m_Node.Name,
                 oldTransform,
@@ -328,24 +107,6 @@ public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
     private void OnTransformApplied(SceneTransformInspection transform)
     {
         m_Node.SetTransform(transform);
-
-        var services = ArisenKernel.Lifecycle.EngineKernel.Instance.Services;
-        if (!services.TryGetService<IRuntimeSceneService>(out var sceneService) || sceneService == null)
-        {
-            return;
-        }
-
-        var activeScene = sceneService.ActiveScene;
-        if (activeScene == null ||
-            !string.Equals(
-                AssetPathPolicy.NormalizeFullPath(activeScene.SourcePath),
-                AssetPathPolicy.NormalizeFullPath(m_Node.SourcePath),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        sceneService.RequestSceneLoad(activeScene.Scene);
     }
 
     private static bool TryGetVector3(object value, out Vector3 result)
@@ -374,76 +135,19 @@ public sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
 }
 
 /// <summary>
-/// Overrides the standard Inspector to detect when an ECS Entity is selected.
-/// It dynamically builds categories based on the components attached to the entity.
+/// Extends the standard Inspector with source-asset and active scene-document views.
 /// </summary>
 internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorViewModel
 {
     public ArisenEditor.Core.Services.SelectionService? SelectionService { get; set; }
 
-    private readonly System.Collections.Generic.List<Type> _allComponentTypes;
+    private readonly IEditorSceneDocumentService? m_SceneDocumentService;
     private Guid m_LastModelReimportGuid;
     private string m_LastModelReimportStatus = string.Empty;
 
     public InspectorViewModel()
     {
-        _allComponentTypes = System.AppDomain.CurrentDomain.GetAssemblies()
-            .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } })
-            .Where(t => typeof(ArisenEngine.Core.ECS.IComponent).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract)
-            .OrderBy(t => t.Name)
-            .ToList();
-
-        AddComponentCommand = ReactiveUI.ReactiveCommand.Create<Type>(t => 
-        {
-            if (TargetObject is EntityNodeViewModel node && t != null)
-            {
-                var cmdMgr = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ArisenEngine.Core.Automation.ICommandManager>();
-                cmdMgr?.Execute(new ArisenEditor.Core.Commands.AddComponentCommand(node.Entity, t));
-                
-                // Defer the UI rebuild to the next tick. 
-                // This prevents Avalonia's ComboBox from crashing when its ItemsSource vanishes 
-                // while it's still processing the selection event.
-                Avalonia.Threading.Dispatcher.UIThread.Post(() => RebuildProperties(), Avalonia.Threading.DispatcherPriority.Background);
-            }
-        });
-
-        var svc = ArisenEditor.Core.Services.SceneManagerService.Instance;
-        
-        svc.EntityNameChanged += (entity, name) =>
-        {
-            if (TargetObject is EntityNodeViewModel node && node.Entity == entity)
-            {
-                foreach (var category in Categories)
-                {
-                    if (category.CategoryName == typeof(NameComponent).Name)
-                    {
-                        foreach (var prop in category.Properties)
-                        {
-                            if (prop is ECSPropertyViewModel ecsProp) ecsProp.Refresh();
-                            else if (prop is ECSFieldPropertyViewModel ecsField) ecsField.Refresh();
-                        }
-                    }
-                }
-            }
-        };
-
-        svc.EntityComponentChanged += (entity, compType) =>
-        {
-            if (TargetObject is EntityNodeViewModel node && node.Entity == entity)
-            {
-                foreach (var category in Categories)
-                {
-                    if (category.CategoryName == compType.Name)
-                    {
-                        foreach (var prop in category.Properties)
-                        {
-                            if (prop is ECSPropertyViewModel ecsProp) ecsProp.Refresh();
-                            else if (prop is ECSFieldPropertyViewModel ecsField) ecsField.Refresh();
-                        }
-                    }
-                }
-            }
-        };
+        ArisenKernel.Lifecycle.EngineKernel.Instance.Services.TryGetService(out m_SceneDocumentService);
     }
 
     protected override void RebuildProperties()
@@ -495,71 +199,7 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
             return;
         }
 
-        // 2. Check if we are inspecting a specialized EntityNode
-        if (TargetObject is EntityNodeViewModel node)
-        {
-            CanAddComponent = true;
-            AvailableComponentTypes.Clear();
-
-            var ActiveEntityManager = ArisenEditor.Core.Services.SceneManagerService.Instance.ActiveScene?.Registry;
-            if (ActiveEntityManager == null) return;
-
-            var currentComponents = new System.Collections.Generic.HashSet<Type>();
-
-            foreach (var pool in ActiveEntityManager.GetEntityComponentPools(node.Entity))
-            {
-                var compType = pool.GetComponentType();
-                currentComponents.Add(compType);
-
-                // Create a category for this component
-                var category = new ArisenEditorFramework.Inspector.InspectorCategoryViewModel(compType.Name);
-                Categories.Add(category);
-
-                // Wire Remove button (Undo/Redo supported)
-                category.CanRemove = (compType != typeof(NameComponent)); // Don't allow removing Name component
-                category.RemoveCommand = ReactiveUI.ReactiveCommand.Create(() => 
-                {
-                    var cmdMgr = ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ArisenEngine.Core.Automation.ICommandManager>();
-                    cmdMgr?.Execute(new ArisenEditor.Core.Commands.RemoveComponentCommand(node.Entity, compType));
-                    
-                    // Defer refresh to let UI close expander smoothly
-                    Avalonia.Threading.Dispatcher.UIThread.Post(() => RebuildProperties(), Avalonia.Threading.DispatcherPriority.Background);
-                });
-
-                // Discover fields (ECS components use fields for data per Rules.md)
-                var fields = compType.GetFields(BindingFlags.Public | BindingFlags.Instance);
-                foreach (var field in fields)
-                {
-                    var propVm = new ECSFieldPropertyViewModel(node.Entity, pool, field);
-                    category.Properties.Add(propVm);
-                }
-                
-                // Also support properties if any (though spec says use fields)
-                var props = compType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-                foreach (var prop in props)
-                {
-                    // Filter out any properties we don't want to show
-                    if (prop.Name == "TypeId") continue; // Avoid internal properties if any
-                    
-                    var propVm = new ECSPropertyViewModel(node.Entity, pool, prop);
-                    category.Properties.Add(propVm);
-                }
-            }
-
-            // Populate AvailableComponentTypes
-            foreach(var t in _allComponentTypes)
-            {
-                if (!currentComponents.Contains(t))
-                {
-                    AvailableComponentTypes.Add(t);
-                }
-            }
-        }
-        else
-        {
-            // 3. Fallback to standard reflection for non-ECS objects
-            base.RebuildProperties();
-        }
+        base.RebuildProperties();
     }
 
     private void RebuildSceneAssetEntityProperties(SceneAssetEntityNodeViewModel node)
@@ -661,10 +301,28 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
     private void AddSceneAssetEntityTransformCategory(SceneAssetEntityNodeViewModel node)
     {
         var category = AddCategory("Transform");
-        var isReadOnly = !AssetPathPolicy.IsEditableAssetPath(node.SourcePath);
-        category.Properties.Add(new SceneTransformPropertyViewModel(node, SceneTransformProperty.Position, isReadOnly));
-        category.Properties.Add(new SceneTransformPropertyViewModel(node, SceneTransformProperty.Rotation, isReadOnly));
-        category.Properties.Add(new SceneTransformPropertyViewModel(node, SceneTransformProperty.Scale, isReadOnly));
+        var currentDocument = m_SceneDocumentService?.Current;
+        var isReadOnly = currentDocument == null ||
+            !currentDocument.IsEditable ||
+            !string.Equals(
+                AssetPathPolicy.NormalizeFullPath(currentDocument.SourcePath),
+                AssetPathPolicy.NormalizeFullPath(node.SourcePath),
+                StringComparison.OrdinalIgnoreCase);
+        category.Properties.Add(new SceneTransformPropertyViewModel(
+            node,
+            m_SceneDocumentService,
+            SceneTransformProperty.Position,
+            isReadOnly));
+        category.Properties.Add(new SceneTransformPropertyViewModel(
+            node,
+            m_SceneDocumentService,
+            SceneTransformProperty.Rotation,
+            isReadOnly));
+        category.Properties.Add(new SceneTransformPropertyViewModel(
+            node,
+            m_SceneDocumentService,
+            SceneTransformProperty.Scale,
+            isReadOnly));
 
         if (isReadOnly)
         {

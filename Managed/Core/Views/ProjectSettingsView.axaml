@@ -1,0 +1,165 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:ArisenEditor.ViewModels"
+             mc:Ignorable="d"
+             d:DesignWidth="760"
+             d:DesignHeight="520"
+             x:Class="ArisenEditor.Views.ProjectSettingsView"
+             x:DataType="vm:ProjectSettingsViewModel">
+    <Grid RowDefinitions="Auto,*,Auto" Background="{DynamicResource ArisenPanelDarkBrush}">
+        <Border Grid.Row="0"
+                Padding="20,14"
+                BorderBrush="{DynamicResource ArisenBorderDarkBrush}"
+                BorderThickness="0,0,0,1">
+            <StackPanel Spacing="3">
+                <TextBlock Text="Project Settings" FontSize="16" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding ManifestPath}"
+                           FontSize="11"
+                           Foreground="#64748b"
+                           TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled">
+            <Grid Margin="20"
+                  MaxWidth="760"
+                  HorizontalAlignment="Stretch"
+                  RowDefinitions="Auto,20,Auto,10,Auto,10,Auto,10,Auto,18,Auto,10,Auto,10,Auto,10,Auto,18,Auto">
+                <Grid Grid.Row="0" ColumnDefinitions="140,*" RowDefinitions="Auto,8,Auto">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Project" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ProjectName}" FontWeight="SemiBold"/>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Engine Version" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding EngineVersion}"/>
+                </Grid>
+
+                <Border Grid.Row="2"
+                        BorderBrush="{DynamicResource ArisenBorderDarkBrush}"
+                        BorderThickness="0,1,0,0"/>
+
+                <TextBlock Grid.Row="4" Text="Startup Scene" FontSize="13" FontWeight="SemiBold"/>
+
+                <Grid Grid.Row="6" ColumnDefinitions="140,*,Auto">
+                    <TextBlock Grid.Column="0" Text="Scene Asset" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <ComboBox Grid.Column="1"
+                              Margin="8,0,0,0"
+                              MinWidth="280"
+                              HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding StartupScenes}"
+                              SelectedItem="{Binding SelectedStartupScene, Mode=TwoWay}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ProjectAssetOption">
+                                <Grid RowDefinitions="Auto,Auto" MinWidth="260">
+                                    <TextBlock Grid.Row="0" Text="{Binding Name}" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Row="1"
+                                               Text="{Binding RelativePath}"
+                                               FontSize="10"
+                                               Foreground="#64748b"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Grid.Column="2"
+                            Margin="8,0,0,0"
+                            Classes="ToolbarButton"
+                            Command="{Binding RefreshCommand}"
+                            ToolTip.Tip="Refresh project assets"
+                            Width="30"
+                            Height="30"
+                            Padding="7">
+                        <PathIcon Data="{StaticResource RefreshIcon}" Width="14" Height="14"/>
+                    </Button>
+                </Grid>
+
+                <Grid Grid.Row="8" ColumnDefinitions="140,*" RowDefinitions="Auto,8,Auto,8,Auto">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="GUID" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding SelectedSceneGuid}" IsReadOnly="True"/>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Package" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SelectedScenePackage}" IsReadOnly="True"/>
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Source" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding SelectedSceneSource}" IsReadOnly="True"/>
+                </Grid>
+
+                <Border Grid.Row="10"
+                        BorderBrush="{DynamicResource ArisenBorderDarkBrush}"
+                        BorderThickness="0,1,0,0"/>
+
+                <TextBlock Grid.Row="12" Text="Render Pipeline" FontSize="13" FontWeight="SemiBold"/>
+
+                <Grid Grid.Row="14" ColumnDefinitions="140,*">
+                    <TextBlock Grid.Column="0" Text="Settings Asset" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <ComboBox Grid.Column="1"
+                              Margin="8,0,0,0"
+                              MinWidth="280"
+                              HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding RenderPipelines}"
+                              SelectedItem="{Binding SelectedRenderPipeline, Mode=TwoWay}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ProjectAssetOption">
+                                <Grid RowDefinitions="Auto,Auto" MinWidth="260">
+                                    <TextBlock Grid.Row="0" Text="{Binding Name}" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Row="1"
+                                               Text="{Binding RelativePath}"
+                                               FontSize="10"
+                                               Foreground="#64748b"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+
+                <Grid Grid.Row="16" ColumnDefinitions="140,*" RowDefinitions="Auto,8,Auto,8,Auto">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="GUID" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding SelectedRenderPipelineGuid}" IsReadOnly="True"/>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Package" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding SelectedRenderPipelinePackage}" IsReadOnly="True"/>
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Source" Foreground="#94a3b8" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding SelectedRenderPipelineSource}" IsReadOnly="True"/>
+                </Grid>
+
+                <Grid Grid.Row="18" ColumnDefinitions="Auto,*">
+                    <Button Grid.Column="0" Command="{Binding UseActiveSceneCommand}" Padding="10,6">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <PathIcon Data="{StaticResource SceneIcon}" Width="14" Height="14"/>
+                            <TextBlock Text="Use Active Scene"/>
+                        </StackPanel>
+                    </Button>
+                    <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding StatusText}" Foreground="#94a3b8" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding ErrorText}"
+                                   IsVisible="{Binding HasError}"
+                                   Foreground="#f87171"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </ScrollViewer>
+
+        <Border Grid.Row="2"
+                Padding="12"
+                BorderBrush="{DynamicResource ArisenBorderDarkBrush}"
+                BorderThickness="0,1,0,0">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                <Button Command="{Binding RevertCommand}"
+                        IsEnabled="{Binding CanRevert}"
+                        Padding="10,6">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <PathIcon Data="{StaticResource UndoIcon}" Width="14" Height="14"/>
+                        <TextBlock Text="Revert"/>
+                    </StackPanel>
+                </Button>
+                <Button Command="{Binding ApplyCommand}"
+                        IsEnabled="{Binding CanApply}"
+                        Padding="10,6">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <PathIcon Data="{StaticResource SaveIcon}" Width="14" Height="14"/>
+                        <TextBlock Text="Apply"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

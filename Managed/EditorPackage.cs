@@ -10,21 +10,44 @@ using Avalonia;
 using Avalonia.ReactiveUI;
 using ArisenEngine.Rendering;
 using ArisenEngine.Core.Diagnostics;
+using ArisenEngine.Core.Assets;
+using ArisenEngine.Core.Automation;
+using ArisenEngine.Resources.Serialization;
 
 namespace ArisenEditor;
 
 public class EditorPackage : IPackageEntry, IApplicationHost
 {
+    private IEditorSceneDocumentService? m_SceneDocumentService;
+
     public void OnLoad(IServiceRegistry registry)
     {
         EditorLog.Initialize(new EditorLogService("editor.log"));
         EditorLog.Info("[EditorPackage] Registering Arisen Editor Avalonia Host.");
+
+        m_SceneDocumentService = new EditorSceneDocumentService(
+            registry.GetService<IAssetDatabase>(),
+            registry.GetService<IRuntimeSceneService>(),
+            registry.GetService<ICommandManager>());
+        m_SceneDocumentService.OperationFailed += OnSceneDocumentOperationFailed;
+        registry.RegisterService<IEditorSceneDocumentService>(m_SceneDocumentService);
         registry.RegisterService<IApplicationHost>(this);
     }
 
 
     public void OnUnload(IServiceRegistry registry)
     {
+        if (m_SceneDocumentService != null)
+        {
+            m_SceneDocumentService.OperationFailed -= OnSceneDocumentOperationFailed;
+        }
+        m_SceneDocumentService?.Dispose();
+        m_SceneDocumentService = null;
+    }
+
+    private static void OnSceneDocumentOperationFailed(string diagnostic)
+    {
+        EditorLog.Warning($"[EditorSceneDocument] {diagnostic}");
     }
 
     public void Run(string[] args)

@@ -12,6 +12,8 @@ using ArisenEngine.Rendering;
 using ArisenKernel.Lifecycle;
 using ArisenKernel.Contracts;
 using ArisenKernel.Diagnostics;
+using ArisenEditor.Core.Validation;
+using ArisenEditor.ViewModels;
 
 namespace ArisenEditor.Views;
 
@@ -42,6 +44,7 @@ public partial class ArisenViewportControl : Control
     private int _lastRequestedSurfaceWidth;
     private int _lastRequestedSurfaceHeight;
     private int _outputReadyDispatchQueued;
+    private EditorViewportKind _viewportKind = EditorViewportKind.SceneView;
     
     private readonly Action _updateAction;
     private readonly Action _outputReadyDispatchAction;
@@ -152,8 +155,19 @@ public partial class ArisenViewportControl : Control
             _renderSubsystem = EngineKernel.Instance.Services.GetService<RenderSubsystem>();
             if (_renderSubsystem != null)
             {
+                _viewportKind = DataContext is EditorViewportViewModel { IsSceneView: false }
+                    ? EditorViewportKind.GameView
+                    : EditorViewportKind.SceneView;
                 var pixelSize = GetPhysicalPixelSize();
-                _renderSubsystem.RegisterSurface(this.Handle.Handle, "EditorViewport", SurfaceType.SceneView, pixelSize.Width, pixelSize.Height);
+                var surfaceType = _viewportKind == EditorViewportKind.SceneView
+                    ? SurfaceType.SceneView
+                    : SurfaceType.GameView;
+                _renderSubsystem.RegisterSurface(
+                    this.Handle.Handle,
+                    _viewportKind.ToString(),
+                    surfaceType,
+                    pixelSize.Width,
+                    pixelSize.Height);
                 _lastRequestedSurfaceWidth = pixelSize.Width;
                 _lastRequestedSurfaceHeight = pixelSize.Height;
                 KernelLog.Info($"[ArisenViewportControl] Registered surface 0x{this.Handle.Handle:X} ({pixelSize.Width}x{pixelSize.Height})");
@@ -401,7 +415,35 @@ public partial class ArisenViewportControl : Control
             _presentationState.MarkPresented(info);
 
             // Report consumption back to engine for back-pressure
-            _renderSubsystem?.ReportConsumedFrameIndex(this.Handle.Handle, info.FrameIndex);
+            var consumptionReported = _renderSubsystem?.ReportConsumedFrameIndex(
+                this.Handle.Handle,
+                info.FrameIndex) == true;
+            var lastConsumedFrameIndex = _renderSubsystem?.GetLastConsumedFrameIndex(
+                this.Handle.Handle) ?? 0;
+            var visual = _visual;
+            if (visual != null)
+            {
+                var requiresVerticalFlip = string.Equals(
+                    _handleType,
+                    KnownPlatformGraphicsExternalImageHandleTypes.VulkanOpaqueNtHandle,
+                    StringComparison.Ordinal);
+                EditorViewportPresentationDiagnostics.Report(new EditorViewportPresentationObservation(
+                    _viewportKind,
+                    info.Ticket,
+                    info.FrameIndex,
+                    info.ResizeGeneration,
+                    info.Width,
+                    info.Height,
+                    lastConsumedFrameIndex,
+                    consumptionReported,
+                    requiresVerticalFlip,
+                    (float)visual.Scale.X,
+                    (float)visual.Scale.Y,
+                    (float)visual.CenterPoint.X,
+                    (float)visual.CenterPoint.Y,
+                    (float)visual.Size.X,
+                    (float)visual.Size.Y));
+            }
         }
         catch (PlatformGraphicsContextLostException)
         {

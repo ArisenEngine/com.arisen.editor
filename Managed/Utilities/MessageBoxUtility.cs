@@ -1,82 +1,69 @@
-using MsBox.Avalonia.Enums;
-using MsBox.Avalonia;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using MsBox.Avalonia;
+using MsBox.Avalonia.Enums;
 
-namespace ArisenEditorFramework.Utilities
+namespace ArisenEditorFramework.Utilities;
+
+public static class MessageBoxUtility
 {
-    public static class MessageBoxUtility
+    public static async Task<ButtonResult> ShowMessageBoxStandard(
+        Window owner,
+        string title,
+        string text,
+        ButtonEnum buttons = ButtonEnum.Ok,
+        Icon icon = Icon.None)
     {
-        /// <summary>
-        /// Shows a message box as a dialog of the given owner window.
-        /// This is the preferred overload when you have a known visible window.
-        /// </summary>
-        public static async Task ShowMessageBoxStandard(Window owner, string title, string text, 
-            ButtonEnum @enum = ButtonEnum.Ok, Icon icon = Icon.None)
+        var box = MessageBoxManager.GetMessageBoxStandard(title, text, buttons, icon);
+        if (owner.IsVisible)
         {
-            var box = MessageBoxManager.GetMessageBoxStandard(title, text, @enum);
-            
-            if (owner.IsVisible)
-            {
-                await box.ShowWindowDialogAsync(owner);
-            }
-            else
-            {
-                // Owner exists but isn't visible — show with a temporary window
-                await ShowWithTemporaryOwner(box);
-            }
+            return await box.ShowWindowDialogAsync(owner);
         }
 
-        /// <summary>
-        /// Shows a message box, auto-detecting the owner window.
-        /// Falls back to a temporary invisible owner if no MainWindow is available.
-        /// </summary>
-        public static async Task ShowMessageBoxStandard(string title, string text, ButtonEnum @enum = ButtonEnum.Ok, 
-            Icon icon = Icon.None, WindowStartupLocation windowStartupLocation = WindowStartupLocation.CenterScreen)
+        return await ShowWithTemporaryOwner(box);
+    }
+
+    public static async Task<ButtonResult> ShowMessageBoxStandard(
+        string title,
+        string text,
+        ButtonEnum buttons = ButtonEnum.Ok,
+        Icon icon = Icon.None,
+        WindowStartupLocation windowStartupLocation = WindowStartupLocation.CenterScreen)
+    {
+        var box = MessageBoxManager.GetMessageBoxStandard(title, text, buttons, icon);
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop &&
+            desktop.MainWindow is { IsVisible: true } mainWindow)
         {
-            var box = MessageBoxManager.GetMessageBoxStandard(title, text, @enum);
-            
-            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            {
-                if (desktop.MainWindow != null && desktop.MainWindow.IsVisible)
-                {
-                    await box.ShowWindowDialogAsync(desktop.MainWindow);
-                }
-                else 
-                {
-                    await ShowWithTemporaryOwner(box);
-                }
-            }
-            else
-            {
-                await ShowWithTemporaryOwner(box);
-            }
+            return await box.ShowWindowDialogAsync(mainWindow);
         }
 
-        private static async Task ShowWithTemporaryOwner(MsBox.Avalonia.Base.IMsBox<MsBox.Avalonia.Enums.ButtonResult> box)
-        {
-            // Create a temporary invisible owner window to ensure the message box displays reliably.
-            var tempWindow = new Window
-            {
-                Opacity = 0,
-                Width = 1,
-                Height = 1,
-                WindowStartupLocation = WindowStartupLocation.CenterScreen,
-                SystemDecorations = SystemDecorations.None,
-                ShowInTaskbar = false
-            };
+        return await ShowWithTemporaryOwner(box, windowStartupLocation);
+    }
 
-            try
-            {
-                tempWindow.Show();
-                await box.ShowWindowDialogAsync(tempWindow);
-            }
-            finally
-            {
-                tempWindow.Close();
-            }
+    private static async Task<ButtonResult> ShowWithTemporaryOwner(
+        MsBox.Avalonia.Base.IMsBox<ButtonResult> box,
+        WindowStartupLocation windowStartupLocation = WindowStartupLocation.CenterScreen)
+    {
+        var temporaryOwner = new Window
+        {
+            Opacity = 0,
+            Width = 1,
+            Height = 1,
+            WindowStartupLocation = windowStartupLocation,
+            SystemDecorations = SystemDecorations.None,
+            ShowInTaskbar = false
+        };
+
+        try
+        {
+            temporaryOwner.Show();
+            return await box.ShowWindowDialogAsync(temporaryOwner);
+        }
+        finally
+        {
+            temporaryOwner.Close();
         }
     }
 }

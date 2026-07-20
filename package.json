@@ -14,11 +14,14 @@
       {
         "interface": "ArisenKernel.Contracts.IApplicationHost",
         "priority": 100
-      }
+      },
+      "ArisenEditor.Core.Services.IEditorSceneDocumentService"
     ],
     "requires": [
       "ArisenKernel.Contracts.IRHIBackend",
-      "ArisenEngine.Resources.Serialization.IRuntimeSceneService"
+      "ArisenEngine.Resources.Serialization.IRuntimeSceneService",
+      "ArisenEngine.Core.Assets.IAssetDatabase",
+      "ArisenEngine.Core.Automation.ICommandManager"
     ]
   },
   "dependencies": {

@@ -14,7 +14,6 @@ using ArisenEditor.Core.Lifecycle.BootSteps;
 using ArisenEditorFramework.Lifecycle;
 using ArisenEditorFramework.Utilities;
 using ArisenEditorFramework.UI.Common;
-using ArisenEditor.ViewModels;
 using ArisenEditor.Core.Factory;
 using ArisenEngine.Core.Automation;
 using Avalonia.Controls;
@@ -22,6 +21,9 @@ using ArisenEngine;
 using ReactiveUI;
 using System.IO;
 using ArisenEditor.Core.Services;
+using ArisenEditor.Core.Validation;
+using ArisenKernel.Diagnostics;
+using Avalonia.Threading;
 
 namespace ArisenEditor
 {
@@ -29,6 +31,7 @@ namespace ArisenEditor
     {
         internal static IThemeManager? ThemeManager;
         private static ArisenEditor.Core.Lifecycle.EditorEngineRunner? s_EngineRunner;
+        private static EditorViewportSmokeSession? s_ViewportSmokeSession;
         
         public override void Initialize()
         {
@@ -52,8 +55,19 @@ namespace ArisenEditor
 
                 desktop.Exit += (sender, args) => 
                 {
+                    s_ViewportSmokeSession?.Dispose();
                     s_EngineRunner?.Stop();
                 };
+
+                string[] commandLineArgs = Environment.GetCommandLineArgs();
+                if (EditorViewportSmokeOptions.IsRequested(commandLineArgs))
+                {
+                    Dispatcher.UIThread.Post(
+                        () => LaunchEditorViewportSmoke(desktop, commandLineArgs),
+                        DispatcherPriority.Loaded);
+                    base.OnFrameworkInitializationCompleted();
+                    return;
+                }
 
                 // Global UI exception handler
                 Avalonia.Threading.Dispatcher.UIThread.UnhandledException += (sender, args) => 
@@ -157,6 +171,44 @@ namespace ArisenEditor
             }
             
             base.OnFrameworkInitializationCompleted();
+        }
+
+        private static void LaunchEditorViewportSmoke(
+            IClassicDesktopStyleApplicationLifetime desktop,
+            string[] args)
+        {
+            try
+            {
+                var projectSubsystem = ArisenKernel.Lifecycle.EngineKernel.Instance.Services
+                    .GetService<ArisenKernel.Lifecycle.ProjectSubsystem>();
+                if (projectSubsystem == null || string.IsNullOrWhiteSpace(projectSubsystem.ProjectDir))
+                {
+                    throw new InvalidOperationException(
+                        "Editor viewport smoke requires an initialized workspace project context.");
+                }
+
+                var options = EditorViewportSmokeOptions.Parse(args, projectSubsystem.ProjectDir);
+                s_ViewportSmokeSession = new EditorViewportSmokeSession(desktop, options);
+                s_EngineRunner = new ArisenEditor.Core.Lifecycle.EditorEngineRunner();
+                s_ViewportSmokeSession.Start(() =>
+                {
+                    HardwareWarmupStep.InitializeBackend();
+                    s_EngineRunner.Start();
+                });
+            }
+            catch (Exception ex)
+            {
+                KernelLog.Error($"[EditorViewportSmoke] Failed to start: {ex.Message}");
+                Environment.ExitCode = 1;
+                if (s_ViewportSmokeSession != null)
+                {
+                    s_ViewportSmokeSession.ReportFailure(ex.Message);
+                }
+                else
+                {
+                    desktop.Shutdown(1);
+                }
+            }
         }
 
         private async Task ShowPickerAndLaunch(IClassicDesktopStyleApplicationLifetime desktop)
@@ -283,6 +335,52 @@ namespace ArisenEditor
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 WindowState = WindowState.Maximized
             };
+
+            var sceneDocuments = ArisenKernel.Lifecycle.EngineKernel.Instance.Services
+                .GetService<IEditorSceneDocumentService>();
+            void UpdateWindowTitle(EditorSceneDocumentState? state)
+            {
+                string sceneSuffix = state == null
+                    ? string.Empty
+                    : $" - {state.Name}{(state.IsDirty ? "*" : string.Empty)}" +
+                      (state.HasExternalChanges ? " [external change]" : string.Empty);
+                window.Title = $"Arisen Editor - {metadata.Name}{sceneSuffix}";
+            }
+
+            Action<EditorSceneDocumentState?> sceneStateChanged = state =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => UpdateWindowTitle(state));
+            sceneDocuments.StateChanged += sceneStateChanged;
+            UpdateWindowTitle(sceneDocuments.Current);
+
+            bool closeApproved = false;
+            bool closeResolutionPending = false;
+            window.Closing += async (_, args) =>
+            {
+                if (closeApproved || sceneDocuments.Current is not { IsDirty: true })
+                {
+                    return;
+                }
+
+                args.Cancel = true;
+                if (closeResolutionPending)
+                {
+                    return;
+                }
+
+                closeResolutionPending = true;
+                bool resolved = await EditorSceneDocumentInteraction.ResolveUnsavedChangesAsync(
+                    sceneDocuments,
+                    "closing the editor",
+                    window);
+                closeResolutionPending = false;
+                if (resolved)
+                {
+                    closeApproved = true;
+                    window.Close();
+                }
+            };
+            window.Closed += (_, _) => sceneDocuments.StateChanged -= sceneStateChanged;
+
             // Attach the AI/Command-friendly Global Input Manager interceptor to the window root
             window.AddHandler(Avalonia.Input.InputElement.KeyDownEvent, ArisenEditorFramework.Services.EditorInputManager.Instance.OnGlobalPreviewKeyDown, Avalonia.Interactivity.RoutingStrategies.Tunnel);
             
@@ -323,29 +421,6 @@ namespace ArisenEditor
                     bypassTextInput: false
                 )
             );
-
-            // Register Delete / Backspace for Entities
-            var deleteCmd = ReactiveCommand.Create(() => 
-            {
-                if (panelFactory is ArisenPanelFactory apf)
-                {
-                    if (apf.SelectionService.CurrentSelection is ArisenEditor.ViewModels.EntityNodeViewModel entityNode)
-                    {
-                        var svc = ArisenEditor.Core.Services.SceneManagerService.Instance;
-                        if (svc.ActiveScene != null)
-                        {
-                            ArisenKernel.Lifecycle.EngineKernel.Instance.Services.GetService<ICommandManager>()!.Execute(
-                                new ArisenEditor.Core.Commands.DeleteEntityCommand(entityNode.Entity, entityNode.Name)
-                            );
-                        }
-                    }
-                }
-            });
-
-            ArisenEditorFramework.Services.EditorInputManager.Instance.RegisterShortcut(
-                new ArisenEditorFramework.Services.EditorShortcut(Avalonia.Input.Key.Delete, Avalonia.Input.KeyModifiers.None, deleteCmd, bypassTextInput: false));
-            ArisenEditorFramework.Services.EditorInputManager.Instance.RegisterShortcut(
-                new ArisenEditorFramework.Services.EditorShortcut(Avalonia.Input.Key.Back, Avalonia.Input.KeyModifiers.None, deleteCmd, bypassTextInput: false));
 
             desktop.MainWindow = window;
             desktop.MainWindow.Show();
