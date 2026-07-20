@@ -3,9 +3,9 @@ using Avalonia.Markup.Xaml;
 
 namespace ArisenEditor.Views;
 
-public partial class HierarchyView : UserControl
+public partial class ProjectSettingsView : UserControl
 {
-    public HierarchyView()
+    public ProjectSettingsView()
     {
         AvaloniaXamlLoader.Load(this);
     }

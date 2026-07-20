@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Input;
@@ -49,7 +50,7 @@ public partial class AssetsBrowserView : UserControl
         }
     }
 
-    private void OnAssetDoubleTapped(object? sender, TappedEventArgs e)
+    private async void OnAssetDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (DataContext is AssetsBrowserViewModel vm && vm.SelectedAsset != null)
         {
@@ -60,12 +61,7 @@ public partial class AssetsBrowserView : UserControl
             }
             else if (IsRuntimeScenePath(node.Path))
             {
-                RequestRuntimeSceneLoad(node);
-            }
-            else if (node.Name.EndsWith(".arisen", StringComparison.OrdinalIgnoreCase))
-            {
-                // Legacy editor-scene support remains until the old .arisen path is retired.
-                SceneManagerService.Instance.LoadScene(node.Path);
+                await RequestRuntimeSceneLoad(node);
             }
         }
     }
@@ -77,13 +73,13 @@ public partial class AssetsBrowserView : UserControl
                string.Equals(extension, ".scene", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void RequestRuntimeSceneLoad(FileTreeNode node)
+    private static async Task RequestRuntimeSceneLoad(FileTreeNode node)
     {
         var services = EngineKernel.Instance.Services;
-        if (!services.TryGetService<IRuntimeSceneService>(out var sceneService) || sceneService == null ||
+        if (!services.TryGetService<IEditorSceneDocumentService>(out var documentService) || documentService == null ||
             !services.TryGetService<IAssetDatabase>(out var assetDatabase) || assetDatabase == null)
         {
-            EditorLog.Error("[AssetsBrowser] Runtime scene services are unavailable.");
+            EditorLog.Error("[AssetsBrowser] Editor scene document services are unavailable.");
             return;
         }
 
@@ -93,9 +89,11 @@ public partial class AssetsBrowserView : UserControl
             return;
         }
 
-        sceneService.RequestSceneLoad(
-            new AssetRef<SceneSourceAsset>(asset.Guid, asset.AssetType, asset.PackageId));
-        EditorLog.Log($"[AssetsBrowser] Queued scene '{asset.SourcePath}' for frame-boundary activation.");
+        var scene = new AssetRef<SceneSourceAsset>(asset.Guid, asset.AssetType, asset.PackageId);
+        if (await EditorSceneDocumentInteraction.TryOpenSceneAsync(documentService, scene))
+        {
+            EditorLog.Log($"[AssetsBrowser] Queued scene '{asset.SourcePath}' for frame-boundary activation.");
+        }
     }
 
     private static bool TryResolveRuntimeSceneAsset(

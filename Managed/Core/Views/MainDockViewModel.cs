@@ -1,4 +1,6 @@
 using ArisenEditor.Core.Factory;
+using ArisenEditor.Core.Services;
+using ArisenKernel.Lifecycle;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using ReactiveUI;
@@ -8,6 +10,7 @@ namespace ArisenEditor.Core.Views;
 internal class MainDockViewModel : ReactiveObject
 {
     private readonly ArisenEditorFramework.Docking.LayoutManager m_LayoutManager;
+    private readonly IEditorSceneDocumentService? m_SceneDocumentService;
     private IRootDock? m_Layout;
     
     public IRootDock? Layout
@@ -44,6 +47,7 @@ internal class MainDockViewModel : ReactiveObject
     
     internal MainDockViewModel(ArisenEditorFramework.Core.IPanelFactory? panelFactory = null)
     {
+        EngineKernel.Instance.Services.TryGetService(out m_SceneDocumentService);
         MenuViewModel = new MenuItemBarViewModel();
         m_LayoutManager = new ArisenEditorFramework.Docking.LayoutManager();
         if (panelFactory != null)
@@ -61,13 +65,16 @@ internal class MainDockViewModel : ReactiveObject
         StopCommand = ReactiveCommand.Create(() => StatusText = "Engine Ready");
         BuildCommand = ReactiveCommand.Create(() => StatusText = "Building...");
         
-        SaveSceneCommand = ReactiveCommand.Create(() =>
+        SaveSceneCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            var svc = ArisenEditor.Core.Services.SceneManagerService.Instance;
-            if (svc.IsDirty && svc.ActiveScene != null)
+            if (m_SceneDocumentService == null)
             {
-                svc.SaveCurrentScene();
+                StatusText = "Scene document service is unavailable.";
+                return;
             }
+
+            var result = await EditorSceneDocumentInteraction.SaveAsync(m_SceneDocumentService);
+            StatusText = result.Diagnostic;
         });
     }
     

@@ -1,5 +1,3 @@
-using System;
-
 namespace ArisenEditor.Core.Models;
 
 /// <summary>
@@ -8,9 +6,4 @@ namespace ArisenEditor.Core.Models;
 /// </summary>
 public class EditorUserSettings
 {
-    /// <summary>
-    /// The Guid of the scene that was last open before the editor closed.
-    /// Loaded automatically if valid during project synthesis.
-    /// </summary>
-    public Guid LastOpenedSceneGuid { get; set; } = Guid.Empty;
 }

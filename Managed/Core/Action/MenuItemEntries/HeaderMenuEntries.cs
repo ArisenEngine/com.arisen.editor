@@ -5,6 +5,7 @@ using ArisenEditor.GameDev;
 using ArisenEditor.Utilities;
 using ArisenEngine;
 using ArisenEngine.Core.Lifecycle;
+using ArisenEditor.Core.Services;
 
 namespace ArisenEditor.Internal.MenuItemEntries;
 
@@ -48,12 +49,13 @@ internal partial class HeaderMenuEntries
     }
     
     [MenuItem("Header/File/Save")]
-    internal static void Save()
+    internal static async void Save()
     {
-        var svc = ArisenEditor.Core.Services.SceneManagerService.Instance;
-        if (svc.ActiveScene != null && svc.IsDirty)
+        if (ArisenKernel.Lifecycle.EngineKernel.Instance.Services
+            .TryGetService<IEditorSceneDocumentService>(out var documentService) &&
+            documentService != null)
         {
-            svc.SaveCurrentScene();
+            await EditorSceneDocumentInteraction.SaveAsync(documentService);
         }
     }
 
