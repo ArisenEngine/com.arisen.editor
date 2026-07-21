@@ -6,4 +6,5 @@ namespace ArisenEditor.Core.Models;
 /// </summary>
 public class EditorUserSettings
 {
+    public bool ShowWorldPartitionOverlay { get; set; } = true;
 }

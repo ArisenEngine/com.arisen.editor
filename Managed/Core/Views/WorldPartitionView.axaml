@@ -1,0 +1,87 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:ArisenEditor.ViewModels"
+             mc:Ignorable="d"
+             d:DesignWidth="720"
+             d:DesignHeight="260"
+             x:Class="ArisenEditor.Views.WorldPartitionView"
+             x:DataType="vm:WorldPartitionViewModel">
+    <Grid RowDefinitions="32,*,24">
+        <Border Grid.Row="0"
+                BorderBrush="{DynamicResource ArisenBorderDarkBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="6,2">
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding WorldName}" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding MetricsText}" Foreground="#94a3b8" FontSize="11"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                    <Button Command="{Binding LoadCommand}" Width="28" Height="26" ToolTip.Tip="Load cell for editing">
+                        <PathIcon Data="{StaticResource PlayIcon}" Width="14" Height="14"/>
+                    </Button>
+                    <Button Command="{Binding UnloadCommand}" Width="28" Height="26" ToolTip.Tip="Unload editor cell pin">
+                        <PathIcon Data="{StaticResource StopIcon}" Width="14" Height="14"/>
+                    </Button>
+                    <Button Command="{Binding PinCommand}" Width="28" Height="26" ToolTip.Tip="Toggle edit pin">
+                        <PathIcon Data="{StaticResource CheckIcon}" Width="14" Height="14"/>
+                    </Button>
+                    <Button Command="{Binding FocusCommand}" Width="28" Height="26" ToolTip.Tip="Focus cell">
+                        <PathIcon Data="{StaticResource SearchIcon}" Width="14" Height="14"/>
+                    </Button>
+                    <Button Command="{Binding SaveAllCommand}" Width="28" Height="26" ToolTip.Tip="Save all world documents">
+                        <PathIcon Data="{StaticResource SaveAllIcon}" Width="14" Height="14"/>
+                    </Button>
+                    <Button Command="{Binding ReimportCommand}" Width="28" Height="26" ToolTip.Tip="Reimport selected cell">
+                        <PathIcon Data="{StaticResource RefreshIcon}" Width="14" Height="14"/>
+                    </Button>
+                    <Button Command="{Binding RetryCommand}" Width="28" Height="26" ToolTip.Tip="Retry failed cell">
+                        <PathIcon Data="{StaticResource RedoIcon}" Width="14" Height="14"/>
+                    </Button>
+                    <Button Command="{Binding MoveSelectedEntityCommand}" Width="28" Height="26" ToolTip.Tip="Move selected hierarchy entity to this cell">
+                        <PathIcon Data="{StaticResource ChevronRightIcon}" Width="14" Height="14"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <DataGrid Grid.Row="1"
+                  ItemsSource="{Binding Cells}"
+                  SelectedItem="{Binding SelectedCell, Mode=TwoWay}"
+                  AutoGenerateColumns="False"
+                  CanUserResizeColumns="True"
+                  GridLinesVisibility="Horizontal"
+                  HeadersVisibility="Column"
+                  IsReadOnly="True"
+                  RowHeight="24">
+            <DataGrid.Columns>
+                <DataGridTemplateColumn Header="" Width="24">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WorldPartitionCellViewModel">
+                            <Ellipse Width="8" Height="8" Fill="{Binding StateBrush}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Cell" Binding="{Binding Coordinate}" Width="110"/>
+                <DataGridTextColumn Header="Layer" Binding="{Binding Layer}" Width="90"/>
+                <DataGridTextColumn Header="Scene" Binding="{Binding SceneName}" Width="*" MinWidth="140"/>
+                <DataGridTextColumn Header="State" Binding="{Binding State}" Width="130"/>
+                <DataGridTextColumn Header="Owner" Binding="{Binding Ownership}" Width="100"/>
+                <DataGridTextColumn Header="Dirty" Binding="{Binding Dirty}" Width="48"/>
+                <DataGridTextColumn Header="Diagnostic" Binding="{Binding Diagnostic}" Width="2*" MinWidth="180"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <Border Grid.Row="2"
+                BorderBrush="{DynamicResource ArisenBorderDarkBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="6,2">
+            <TextBlock Text="{Binding StatusText}"
+                       Foreground="#94a3b8"
+                       FontSize="11"
+                       TextTrimming="CharacterEllipsis"/>
+        </Border>
+    </Grid>
+</UserControl>

@@ -55,6 +55,9 @@ public sealed class EditorViewportSmokeChecks
     public bool GameFirstFramePresented { get; init; }
     public bool GameFrameConsumptionReported { get; init; }
     public bool GameOrientationCorrect { get; init; }
+    public bool WorldVisibleOnFirstOpen { get; init; }
+    public bool WorldCellLoadObserved { get; init; }
+    public bool WorldCellUnloadObserved { get; init; }
 
     public bool Passed =>
         SceneFirstFramePresented &&
@@ -65,12 +68,26 @@ public sealed class EditorViewportSmokeChecks
         SceneOrientationCorrect &&
         GameFirstFramePresented &&
         GameFrameConsumptionReported &&
-        GameOrientationCorrect;
+        GameOrientationCorrect &&
+        WorldVisibleOnFirstOpen &&
+        WorldCellLoadObserved &&
+        WorldCellUnloadObserved;
+}
+
+public sealed class EditorWorldPartitionSmokeObservation
+{
+    public Guid WorldGuid { get; init; }
+    public int CellCount { get; init; }
+    public Guid CellId { get; init; }
+    public bool LoadRequested { get; init; }
+    public bool ActiveObserved { get; init; }
+    public bool UnloadRequested { get; init; }
+    public bool UnloadedObserved { get; init; }
 }
 
 public sealed class EditorViewportSmokeArtifact
 {
-    public int SchemaVersion { get; init; } = 1;
+    public int SchemaVersion { get; init; } = 2;
     public string CapturedAtUtc { get; init; } = DateTimeOffset.UtcNow.ToString("O");
     public required string Profile { get; init; }
     public int TimeoutSeconds { get; init; }
@@ -78,6 +95,7 @@ public sealed class EditorViewportSmokeArtifact
     public EditorViewportPresentationObservation? SceneFirstFrame { get; init; }
     public EditorViewportPresentationObservation? SceneResizedFrame { get; init; }
     public EditorViewportPresentationObservation? GameFirstFrame { get; init; }
+    public EditorWorldPartitionSmokeObservation? WorldPartition { get; init; }
     public string? FailureMessage { get; init; }
     public required EditorViewportSmokeChecks Checks { get; init; }
     public bool Passed => FailureMessage == null && Checks.Passed;
@@ -90,13 +108,24 @@ public sealed class EditorViewportSmokeState
     private EditorViewportSmokeStage m_Stage = EditorViewportSmokeStage.WaitingForSceneFirstFrame;
     private bool m_ScenePresentedBeforeGameViewActivation;
     private int m_GameViewActivationCount;
+    private Guid m_WorldGuid;
+    private int m_WorldCellCount;
+    private Guid m_WorldCellId;
+    private bool m_WorldCellLoadRequested;
+    private bool m_WorldCellActiveObserved;
+    private bool m_WorldCellUnloadRequested;
+    private bool m_WorldCellUnloadedObserved;
 
     public EditorViewportPresentationObservation? SceneFirstFrame { get; private set; }
     public EditorViewportPresentationObservation? SceneResizedFrame { get; private set; }
     public EditorViewportPresentationObservation? GameFirstFrame { get; private set; }
     public string? FailureMessage { get; private set; }
-    public bool IsComplete => m_Stage is EditorViewportSmokeStage.Complete or EditorViewportSmokeStage.Failed;
-    public bool Succeeded => m_Stage == EditorViewportSmokeStage.Complete;
+    public bool IsComplete =>
+        m_Stage == EditorViewportSmokeStage.Failed ||
+        (m_Stage == EditorViewportSmokeStage.Complete && m_WorldCellUnloadedObserved);
+    public bool Succeeded =>
+        m_Stage == EditorViewportSmokeStage.Complete &&
+        m_WorldCellUnloadedObserved;
 
     public EditorViewportSmokeAction Observe(in EditorViewportPresentationObservation observation)
     {
@@ -154,7 +183,9 @@ public sealed class EditorViewportSmokeState
 
                 GameFirstFrame = observation;
                 m_Stage = EditorViewportSmokeStage.Complete;
-                return EditorViewportSmokeAction.Complete;
+                return IsComplete
+                    ? EditorViewportSmokeAction.Complete
+                    : EditorViewportSmokeAction.None;
 
             default:
                 return EditorViewportSmokeAction.None;
@@ -170,6 +201,60 @@ public sealed class EditorViewportSmokeState
         }
 
         m_GameViewActivationCount++;
+    }
+
+    public void ObserveWorldFirstOpen(Guid worldGuid, int cellCount, Guid cellId)
+    {
+        if (m_Stage == EditorViewportSmokeStage.Failed)
+        {
+            return;
+        }
+        if (worldGuid == Guid.Empty || cellCount <= 0 || cellId == Guid.Empty)
+        {
+            Fail("The Editor did not expose a valid active world and world cell on first open.");
+            return;
+        }
+
+        m_WorldGuid = worldGuid;
+        m_WorldCellCount = cellCount;
+        m_WorldCellId = cellId;
+    }
+
+    public void NotifyWorldCellLoadRequested(Guid cellId)
+    {
+        if (!ValidateWorldCell(cellId)) return;
+        m_WorldCellLoadRequested = true;
+    }
+
+    public void ObserveWorldCellActive(Guid cellId)
+    {
+        if (!ValidateWorldCell(cellId) || !m_WorldCellLoadRequested)
+        {
+            Fail("The Editor world cell became active before its explicit load request was recorded.");
+            return;
+        }
+        m_WorldCellActiveObserved = true;
+    }
+
+    public void NotifyWorldCellUnloadRequested(Guid cellId)
+    {
+        if (!ValidateWorldCell(cellId) || !m_WorldCellActiveObserved)
+        {
+            Fail("The Editor world cell unload was requested before activation was observed.");
+            return;
+        }
+        m_WorldCellUnloadRequested = true;
+    }
+
+    public bool ObserveWorldCellUnloaded(Guid cellId)
+    {
+        if (!ValidateWorldCell(cellId) || !m_WorldCellUnloadRequested)
+        {
+            Fail("The Editor world cell unloaded before its explicit unload request was recorded.");
+            return false;
+        }
+        m_WorldCellUnloadedObserved = true;
+        return IsComplete;
     }
 
     public EditorViewportSmokeAction Fail(string message)
@@ -198,6 +283,7 @@ public sealed class EditorViewportSmokeState
             SceneFirstFrame = SceneFirstFrame,
             SceneResizedFrame = SceneResizedFrame,
             GameFirstFrame = GameFirstFrame,
+            WorldPartition = CreateWorldPartitionObservation(),
             FailureMessage = FailureMessage,
             Checks = checks
         };
@@ -233,8 +319,41 @@ public sealed class EditorViewportSmokeState
                 HasExpectedPresentationTransform(sceneResized.Value),
             GameFirstFramePresented = gameFirst.HasValue,
             GameFrameConsumptionReported = gameFirst.HasValue && HasReportedConsumption(gameFirst.Value),
-            GameOrientationCorrect = gameFirst.HasValue && HasExpectedPresentationTransform(gameFirst.Value)
+            GameOrientationCorrect = gameFirst.HasValue && HasExpectedPresentationTransform(gameFirst.Value),
+            WorldVisibleOnFirstOpen =
+                m_WorldGuid != Guid.Empty &&
+                m_WorldCellCount > 0 &&
+                m_WorldCellId != Guid.Empty,
+            WorldCellLoadObserved = m_WorldCellLoadRequested && m_WorldCellActiveObserved,
+            WorldCellUnloadObserved = m_WorldCellUnloadRequested && m_WorldCellUnloadedObserved
         };
+    }
+
+    private EditorWorldPartitionSmokeObservation? CreateWorldPartitionObservation()
+    {
+        return m_WorldGuid == Guid.Empty
+            ? null
+            : new EditorWorldPartitionSmokeObservation
+            {
+                WorldGuid = m_WorldGuid,
+                CellCount = m_WorldCellCount,
+                CellId = m_WorldCellId,
+                LoadRequested = m_WorldCellLoadRequested,
+                ActiveObserved = m_WorldCellActiveObserved,
+                UnloadRequested = m_WorldCellUnloadRequested,
+                UnloadedObserved = m_WorldCellUnloadedObserved
+            };
+    }
+
+    private bool ValidateWorldCell(Guid cellId)
+    {
+        if (m_WorldCellId != Guid.Empty && cellId == m_WorldCellId)
+        {
+            return true;
+        }
+
+        Fail($"Editor world smoke observed unexpected cell '{cellId:D}'.");
+        return false;
     }
 
     private static string? ValidateObservation(in EditorViewportPresentationObservation observation)

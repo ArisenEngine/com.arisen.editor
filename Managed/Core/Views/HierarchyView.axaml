@@ -41,6 +41,10 @@
                     <StackPanel Orientation="Horizontal" Spacing="8" Margin="4,2">
                         <PathIcon Data="{StaticResource SceneIcon}" Width="14" Height="14" Foreground="{DynamicResource TextBrush}"/>
                         <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                        <TextBlock Text="{Binding Status}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#64748b"
+                                   FontSize="10"/>
                     </StackPanel>
                 </TreeDataTemplate>
                 

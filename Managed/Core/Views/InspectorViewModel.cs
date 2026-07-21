@@ -27,11 +27,13 @@ internal sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
 {
     private readonly SceneAssetEntityNodeViewModel m_Node;
     private readonly IEditorSceneDocumentService? m_DocumentService;
+    private readonly IEditorWorldDocumentService? m_WorldDocumentService;
     private readonly SceneTransformProperty m_Property;
 
     public SceneTransformPropertyViewModel(
         SceneAssetEntityNodeViewModel node,
         IEditorSceneDocumentService? documentService,
+        IEditorWorldDocumentService? worldDocumentService,
         SceneTransformProperty property,
         bool isReadOnly)
         : base(
@@ -43,6 +45,7 @@ internal sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
     {
         m_Node = node;
         m_DocumentService = documentService;
+        m_WorldDocumentService = worldDocumentService;
         m_Property = property;
     }
 
@@ -61,7 +64,8 @@ internal sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
         }
         set
         {
-            if (IsReadOnly || m_DocumentService == null || value == null)
+            if (IsReadOnly || value == null ||
+                (m_DocumentService == null && m_WorldDocumentService == null))
             {
                 return;
             }
@@ -83,19 +87,31 @@ internal sealed class SceneTransformPropertyViewModel : PropertyItemViewModel
                 return;
             }
 
-            var command = new ModifySceneAssetTransformCommand(
-                m_DocumentService,
-                m_Node.EntityIndex,
-                m_Node.Name,
-                oldTransform,
-                newTransform,
-                OnTransformApplied);
-
             try
             {
-                ArisenKernel.Lifecycle.EngineKernel.Instance.Services
-                    .GetService<ICommandManager>()
-                    ?.Execute(command);
+                ICommandManager commands = ArisenKernel.Lifecycle.EngineKernel.Instance.Services
+                    .GetService<ICommandManager>();
+                if (m_Node.CellId.IsValid && m_WorldDocumentService != null)
+                {
+                    commands.Execute(new ModifyWorldCellEntityTransformCommand(
+                        m_WorldDocumentService,
+                        m_Node.CellId,
+                        m_Node.AuthoringGuid,
+                        m_Node.Name,
+                        oldTransform,
+                        newTransform,
+                        OnTransformApplied));
+                }
+                else if (m_DocumentService != null)
+                {
+                    commands.Execute(new ModifySceneAssetTransformCommand(
+                        m_DocumentService,
+                        m_Node.AuthoringGuid,
+                        m_Node.Name,
+                        oldTransform,
+                        newTransform,
+                        OnTransformApplied));
+                }
             }
             catch (Exception ex)
             {
@@ -142,12 +158,14 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
     public ArisenEditor.Core.Services.SelectionService? SelectionService { get; set; }
 
     private readonly IEditorSceneDocumentService? m_SceneDocumentService;
+    private readonly IEditorWorldDocumentService? m_WorldDocumentService;
     private Guid m_LastModelReimportGuid;
     private string m_LastModelReimportStatus = string.Empty;
 
     public InspectorViewModel()
     {
         ArisenKernel.Lifecycle.EngineKernel.Instance.Services.TryGetService(out m_SceneDocumentService);
+        ArisenKernel.Lifecycle.EngineKernel.Instance.Services.TryGetService(out m_WorldDocumentService);
     }
 
     protected override void RebuildProperties()
@@ -207,7 +225,7 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
         var entity = node.Entity;
         var category = AddCategory("Scene Entity");
         AddReadOnly(category, "Name", entity.Name);
-        AddReadOnly(category, "Index", node.EntityIndex);
+        AddReadOnly(category, "Guid", node.AuthoringGuid);
         AddReadOnly(category, "Components", FormatSceneComponents(entity));
         AddReadOnly(category, "Source", node.SourcePath);
 
@@ -302,25 +320,35 @@ internal class InspectorViewModel : ArisenEditorFramework.Inspector.InspectorVie
     {
         var category = AddCategory("Transform");
         var currentDocument = m_SceneDocumentService?.Current;
-        var isReadOnly = currentDocument == null ||
-            !currentDocument.IsEditable ||
-            !string.Equals(
-                AssetPathPolicy.NormalizeFullPath(currentDocument.SourcePath),
-                AssetPathPolicy.NormalizeFullPath(node.SourcePath),
-                StringComparison.OrdinalIgnoreCase);
+        EditorWorldCellDocumentState? worldCell = node.CellId.IsValid
+            ? m_WorldDocumentService?.Current?.Cells.FirstOrDefault(cell => cell.CellId == node.CellId)
+            : null;
+        var isReadOnly = node.IsWorldScene && !node.CellId.IsValid
+            ? true
+            : node.CellId.IsValid
+            ? worldCell == null || !worldCell.SceneDocument.IsEditable
+            : currentDocument == null ||
+              !currentDocument.IsEditable ||
+              !string.Equals(
+                  AssetPathPolicy.NormalizeFullPath(currentDocument.SourcePath),
+                  AssetPathPolicy.NormalizeFullPath(node.SourcePath),
+                  StringComparison.OrdinalIgnoreCase);
         category.Properties.Add(new SceneTransformPropertyViewModel(
             node,
             m_SceneDocumentService,
+            m_WorldDocumentService,
             SceneTransformProperty.Position,
             isReadOnly));
         category.Properties.Add(new SceneTransformPropertyViewModel(
             node,
             m_SceneDocumentService,
+            m_WorldDocumentService,
             SceneTransformProperty.Rotation,
             isReadOnly));
         category.Properties.Add(new SceneTransformPropertyViewModel(
             node,
             m_SceneDocumentService,
+            m_WorldDocumentService,
             SceneTransformProperty.Scale,
             isReadOnly));
 

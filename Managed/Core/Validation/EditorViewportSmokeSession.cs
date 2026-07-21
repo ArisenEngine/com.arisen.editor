@@ -4,9 +4,12 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using ArisenEditor.Core.Services;
 using ArisenEditor.Views;
 using ArisenEditor.ViewModels;
+using ArisenEngine.Resources.Serialization;
 using ArisenKernel.Diagnostics;
+using ArisenKernel.Lifecycle;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
@@ -86,8 +89,13 @@ internal sealed class EditorViewportSmokeSession : IDisposable
     private readonly EditorViewportSmokeOptions m_Options;
     private readonly EditorViewportSmokeState m_State = new();
     private readonly CancellationTokenSource m_TimeoutCancellation = new();
+    private readonly SceneView m_SceneView;
     private readonly TabControl m_Tabs;
     private readonly Window m_Window;
+    private IEditorWorldDocumentService? m_WorldDocuments;
+    private WorldCellId m_WorldCellId;
+    private bool m_WorldValidationStarted;
+    private bool m_WorldUnloadRequested;
     private int m_Finished;
     private bool m_Disposed;
 
@@ -98,13 +106,14 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         m_Desktop = desktop ?? throw new ArgumentNullException(nameof(desktop));
         m_Options = options;
 
+        m_SceneView = new SceneView
+        {
+            DataContext = new SceneViewModel()
+        };
         var sceneTab = new TabItem
         {
             Header = "Scene",
-            Content = new EditorViewportView
-            {
-                DataContext = new EditorViewportViewModel(isSceneView: true)
-            }
+            Content = m_SceneView
         };
         var gameTab = new TabItem
         {
@@ -167,6 +176,7 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         m_TimeoutCancellation.Dispose();
         EditorViewportPresentationDiagnostics.Presented -= OnPresented;
         m_Window.Closed -= OnWindowClosed;
+        DetachWorldDocuments();
     }
 
     private void OnPresented(EditorViewportPresentationObservation observation)
@@ -188,6 +198,12 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             switch (action)
             {
                 case EditorViewportSmokeAction.ResizeSceneView:
+                    BeginWorldPartitionValidation();
+                    if (m_State.IsComplete && !m_State.Succeeded)
+                    {
+                        Complete(m_State.FailureMessage);
+                        return;
+                    }
                     Dispatcher.UIThread.Post(
                         () =>
                         {
@@ -214,6 +230,12 @@ internal sealed class EditorViewportSmokeSession : IDisposable
                     break;
 
                 case EditorViewportSmokeAction.Complete:
+                    if (!m_SceneView.HasWorldPartitionOverlayVisual)
+                    {
+                        Complete(
+                            "SceneView removed its world-partition overlay controls during GameView activation.");
+                        break;
+                    }
                     Complete(null);
                     break;
 
@@ -243,6 +265,117 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         }
     }
 
+    private void BeginWorldPartitionValidation()
+    {
+        if (m_WorldValidationStarted)
+        {
+            return;
+        }
+
+        m_WorldValidationStarted = true;
+        var services = EngineKernel.Instance.Services;
+        if (!services.TryGetService<IEditorWorldDocumentService>(out var documents) ||
+            documents?.Current is not { } world ||
+            world.Cells.Count == 0)
+        {
+            m_State.Fail("The real Editor host did not expose an active world document on its first SceneView frame.");
+            return;
+        }
+
+        EditorWorldCellDocumentState cell = world.Cells
+            .OrderBy(candidate => candidate.CellId)
+            .First();
+        m_WorldDocuments = documents;
+        m_WorldCellId = cell.CellId;
+        m_State.ObserveWorldFirstOpen(world.World.Guid, world.Cells.Count, cell.CellId.Value);
+        if (m_State.IsComplete && !m_State.Succeeded)
+        {
+            return;
+        }
+
+        documents.StateChanged += OnWorldDocumentStateChanged;
+        if (services.TryGetService<IRuntimeWorldStreamingService>(out var streaming) && streaming != null)
+        {
+            streaming.ClearStreamingSource();
+        }
+
+        m_State.NotifyWorldCellLoadRequested(cell.CellId.Value);
+        if (!documents.LoadCellForEditing(cell.CellId))
+        {
+            m_State.Fail($"The real Editor host rejected the explicit load request for cell '{cell.CellId}'.");
+            return;
+        }
+
+        ObserveWorldDocument(documents.Current);
+    }
+
+    private void OnWorldDocumentStateChanged(EditorWorldDocumentState? state)
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(() => ObserveWorldDocument(state), DispatcherPriority.Loaded);
+            return;
+        }
+
+        ObserveWorldDocument(state);
+    }
+
+    private void ObserveWorldDocument(EditorWorldDocumentState? state)
+    {
+        if (Volatile.Read(ref m_Finished) != 0 || state == null || !m_WorldCellId.IsValid)
+        {
+            return;
+        }
+
+        EditorWorldCellDocumentState? cell = state.Cells.FirstOrDefault(
+            candidate => candidate.CellId == m_WorldCellId);
+        if (cell == null)
+        {
+            Complete($"The active Editor world lost smoke cell '{m_WorldCellId}' during validation.");
+            return;
+        }
+        if (cell.Streaming.State == WorldCellStreamingState.Failed)
+        {
+            Complete($"Editor world cell '{m_WorldCellId}' failed during real-host validation: {cell.Streaming.Diagnostic}");
+            return;
+        }
+
+        if (!m_WorldUnloadRequested &&
+            cell.IsEditPinned &&
+            cell.Streaming.State == WorldCellStreamingState.Active)
+        {
+            m_State.ObserveWorldCellActive(m_WorldCellId.Value);
+            m_State.NotifyWorldCellUnloadRequested(m_WorldCellId.Value);
+            m_WorldUnloadRequested = true;
+            if (m_WorldDocuments?.UnloadCellForEditing(m_WorldCellId) != true)
+            {
+                Complete($"The real Editor host rejected the explicit unload request for cell '{m_WorldCellId}'.");
+            }
+            return;
+        }
+
+        if (m_WorldUnloadRequested &&
+            !cell.IsEditPinned &&
+            cell.Streaming.State == WorldCellStreamingState.Unloaded)
+        {
+            bool complete = m_State.ObserveWorldCellUnloaded(m_WorldCellId.Value);
+            DetachWorldDocuments();
+            if (complete)
+            {
+                Complete(null);
+            }
+        }
+    }
+
+    private void DetachWorldDocuments()
+    {
+        if (m_WorldDocuments != null)
+        {
+            m_WorldDocuments.StateChanged -= OnWorldDocumentStateChanged;
+            m_WorldDocuments = null;
+        }
+    }
+
     private void OnWindowClosed(object? sender, EventArgs args)
     {
         if (Volatile.Read(ref m_Finished) == 0)
@@ -266,6 +399,7 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         }
 
         m_TimeoutCancellation.Cancel();
+        DetachWorldDocuments();
         var artifact = m_State.CreateArtifact(m_Options.Profile, m_Options.TimeoutSeconds);
         var exitCode = artifact.Passed ? 0 : 1;
         try
@@ -274,13 +408,14 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             if (artifact.Passed)
             {
                 KernelLog.InfoFormat(
-                    "[EditorViewportSmoke] Passed. Scene={0}x{1}, Resized={2}x{3}, Game={4}x{5}, Output={6}",
+                    "[EditorViewportSmoke] Passed. Scene={0}x{1}, Resized={2}x{3}, Game={4}x{5}, WorldCells={6}, Output={7}",
                     artifact.SceneFirstFrame!.Value.Width,
                     artifact.SceneFirstFrame.Value.Height,
                     artifact.SceneResizedFrame!.Value.Width,
                     artifact.SceneResizedFrame.Value.Height,
                     artifact.GameFirstFrame!.Value.Width,
                     artifact.GameFirstFrame.Value.Height,
+                    artifact.WorldPartition!.CellCount,
                     m_Options.OutputPath);
             }
             else

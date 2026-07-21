@@ -66,7 +66,7 @@ internal interface IEditorSceneDocumentService : IDisposable
     EditorSceneDocumentResult RequestOpenScene(AssetRef<SceneSourceAsset> scene);
 
     EditorSceneDocumentResult ApplyEntityTransform(
-        int entityIndex,
+        Guid entityGuid,
         SceneTransformInspection transform);
 
     EditorSceneDocumentResult ApplyWorkingSource(string sourceText);
@@ -188,7 +188,7 @@ internal sealed class EditorSceneDocumentService : IEditorSceneDocumentService
     }
 
     public EditorSceneDocumentResult ApplyEntityTransform(
-        int entityIndex,
+        Guid entityGuid,
         SceneTransformInspection transform)
     {
         var current = Current;
@@ -207,7 +207,7 @@ internal sealed class EditorSceneDocumentService : IEditorSceneDocumentService
         var edit = SceneAssetLoader.UpdateEntityTransformSource(
             current.SourcePath,
             current.WorkingSource,
-            entityIndex,
+            entityGuid,
             transform);
         if (!edit.Success)
         {
@@ -222,7 +222,7 @@ internal sealed class EditorSceneDocumentService : IEditorSceneDocumentService
         return ApplyWorkingSourceCore(
             current,
             edit.UpdatedSource,
-            $"Updated entity {entityIndex} in scene '{current.Name}'.");
+            $"Updated entity '{entityGuid:D}' in scene '{current.Name}'.");
     }
 
     public EditorSceneDocumentResult ApplyWorkingSource(string sourceText)
@@ -601,7 +601,7 @@ internal sealed class EditorSceneDocumentService : IEditorSceneDocumentService
 
     private void OnRuntimeSceneLoadCompleted(RuntimeSceneLoadReport report)
     {
-        if (report.Result.Success)
+        if (report.Result.Success || report.Kind != RuntimeSceneInstanceKind.Persistent)
         {
             return;
         }
