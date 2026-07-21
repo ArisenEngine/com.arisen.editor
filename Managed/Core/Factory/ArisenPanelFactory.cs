@@ -48,6 +48,7 @@ public class ArisenPanelFactory : DefaultPanelFactory
         });
         RegisterPanel("PackageManager", () => new PackageManagerViewModel());
         RegisterPanel("ProjectSettings", () => new ProjectSettingsViewModel());
+        RegisterPanel("WorldPartition", () => new WorldPartitionViewModel(_selectionService));
 
         RegisterPanel("Viewport", () => new EditorPanelWrapper("Viewport", "Viewport", new Avalonia.Controls.TextBlock { Text = "Viewport Placeholder", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center }));
         RegisterPanel("IconPreview", () => new IconPreviewViewModel());

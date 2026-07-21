@@ -19,6 +19,7 @@ namespace ArisenEditor;
 public class EditorPackage : IPackageEntry, IApplicationHost
 {
     private IEditorSceneDocumentService? m_SceneDocumentService;
+    private IEditorWorldDocumentService? m_WorldDocumentService;
 
     public void OnLoad(IServiceRegistry registry)
     {
@@ -31,12 +32,25 @@ public class EditorPackage : IPackageEntry, IApplicationHost
             registry.GetService<ICommandManager>());
         m_SceneDocumentService.OperationFailed += OnSceneDocumentOperationFailed;
         registry.RegisterService<IEditorSceneDocumentService>(m_SceneDocumentService);
+        m_WorldDocumentService = new EditorWorldDocumentService(
+            registry.GetService<IAssetDatabase>(),
+            registry.GetService<IRuntimeWorldStreamingService>(),
+            registry.GetService<ICommandManager>(),
+            m_SceneDocumentService);
+        m_WorldDocumentService.OperationFailed += OnWorldDocumentOperationFailed;
+        registry.RegisterService<IEditorWorldDocumentService>(m_WorldDocumentService);
         registry.RegisterService<IApplicationHost>(this);
     }
 
 
     public void OnUnload(IServiceRegistry registry)
     {
+        if (m_WorldDocumentService != null)
+        {
+            m_WorldDocumentService.OperationFailed -= OnWorldDocumentOperationFailed;
+        }
+        m_WorldDocumentService?.Dispose();
+        m_WorldDocumentService = null;
         if (m_SceneDocumentService != null)
         {
             m_SceneDocumentService.OperationFailed -= OnSceneDocumentOperationFailed;
@@ -48,6 +62,11 @@ public class EditorPackage : IPackageEntry, IApplicationHost
     private static void OnSceneDocumentOperationFailed(string diagnostic)
     {
         EditorLog.Warning($"[EditorSceneDocument] {diagnostic}");
+    }
+
+    private static void OnWorldDocumentOperationFailed(string diagnostic)
+    {
+        EditorLog.Warning($"[EditorWorldDocument] {diagnostic}");
     }
 
     public void Run(string[] args)

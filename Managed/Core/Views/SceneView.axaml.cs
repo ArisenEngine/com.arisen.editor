@@ -7,10 +7,16 @@ namespace ArisenEditor.Views;
 
 public partial class SceneView : UserControl
 {
+    private EditorViewportView? m_Viewport;
+
+    internal bool HasWorldPartitionOverlayVisual =>
+        WorldPartitionOverlayHost.Parent != null &&
+        WorldPartitionOverlayToggle.Parent != null &&
+        WorldPartitionOverlayPanel.Parent != null;
+
     public SceneView()
     {
         InitializeComponent();
-        
     }
 
     protected override void OnLoaded(RoutedEventArgs e)
@@ -22,25 +28,32 @@ public partial class SceneView : UserControl
     protected override void OnUnloaded(RoutedEventArgs e)
     {
         base.OnUnloaded(e);
-        foreach (var child in SceneViewContainer.Children)
+        if (m_Viewport?.DataContext is IDisposable disposable)
         {
-            if (child is Control { DataContext: IDisposable disposable })
-            {
-                disposable.Dispose();
-            }
+            disposable.Dispose();
         }
 
-        SceneViewContainer.Children.Clear();
+        if (m_Viewport != null)
+        {
+            SceneViewContainer.Children.Remove(m_Viewport);
+            m_Viewport = null;
+        }
     }
-    
+
     private void LoadViewport()
     {
+        if (m_Viewport != null)
+        {
+            return;
+        }
+
         var sceneViewModel = DataContext as SceneViewModel;
-        SceneViewContainer.Children.Add(new EditorViewportView()
+        m_Viewport = new EditorViewportView
         {
             DataContext = new EditorViewportViewModel(
                 isSceneView: true,
                 sceneViewModel?.SelectionService)
-        });
+        };
+        SceneViewContainer.Children.Insert(0, m_Viewport);
     }
 }

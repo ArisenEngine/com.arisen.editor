@@ -3,8 +3,52 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:ArisenEditor.ViewModels"
+             xmlns:views="using:ArisenEditor.Views"
              mc:Ignorable="d" d:DesignWidth="450" d:DesignHeight="450"
              x:Class="ArisenEditor.Views.SceneView"
              x:DataType="vm:SceneViewModel" x:CompileBindings="True">
-    <Grid x:Name="SceneViewContainer" Background="Transparent"></Grid>
+    <UserControl.Styles>
+        <Style Selector="ToggleButton.world-partition-toggle">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Padding" Value="5"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="Foreground" Value="#cbd5e1"/>
+            <Setter Property="Background" Value="#d91f2937"/>
+            <Setter Property="BorderBrush" Value="#64748b"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="4"/>
+        </Style>
+        <Style Selector="ToggleButton.world-partition-toggle:checked">
+            <Setter Property="Foreground" Value="#f8fafc"/>
+            <Setter Property="Background" Value="#0369a1"/>
+            <Setter Property="BorderBrush" Value="#38bdf8"/>
+        </Style>
+    </UserControl.Styles>
+    <Grid x:Name="SceneViewContainer" Background="Transparent">
+        <StackPanel x:Name="WorldPartitionOverlayHost"
+                    Margin="10,48,10,10"
+                    Spacing="4"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    ZIndex="10">
+            <ToggleButton x:Name="WorldPartitionOverlayToggle"
+                          Classes="world-partition-toggle"
+                          IsChecked="{Binding IsWorldPartitionOverlayVisible, Mode=TwoWay}"
+                          ToolTip.Tip="Toggle world partition overlay">
+                <PathIcon Data="{StaticResource SceneIcon}" Width="16" Height="16"/>
+            </ToggleButton>
+            <Border x:Name="WorldPartitionOverlayPanel"
+                    Width="230"
+                    Height="170"
+                    Padding="4"
+                    IsVisible="{Binding IsWorldPartitionOverlayVisible}"
+                    Background="#d91f2937"
+                    BorderBrush="#64748b"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <views:WorldPartitionOverlayControl/>
+            </Border>
+        </StackPanel>
+    </Grid>
 </UserControl>
