@@ -139,8 +139,8 @@ public partial class ArisenViewportControl : Control
 
             if ((_syncCapabilities & CompositionGpuImportedImageSynchronizationCapabilities.Automatic) == 0)
             {
-                KernelLog.Warning("[ArisenViewportControl] Avalonia cannot automatically synchronize imported Vulkan images on this compositor. " +
-                    "The viewport now requires explicit exported Vulkan semaphore interop before CompositionDrawingSurface can be updated.");
+                KernelLog.Info("[ArisenViewportControl] Automatic imported-image synchronization is unavailable; " +
+                    "using explicit exported Vulkan semaphores for viewport updates.");
             }
 
             // 2. Setup Composition Visuals

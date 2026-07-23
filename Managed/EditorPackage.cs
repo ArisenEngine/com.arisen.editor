@@ -20,31 +20,39 @@ public class EditorPackage : IPackageEntry, IApplicationHost
 {
     private IEditorSceneDocumentService? m_SceneDocumentService;
     private IEditorWorldDocumentService? m_WorldDocumentService;
+    private EditorSceneViewFocusController? m_SceneViewFocusController;
 
     public void OnLoad(IServiceRegistry registry)
     {
         EditorLog.Initialize(new EditorLogService("editor.log"));
         EditorLog.Info("[EditorPackage] Registering Arisen Editor Avalonia Host.");
 
+        IAssetDatabase assetDatabase = registry.GetService<IAssetDatabase>();
         m_SceneDocumentService = new EditorSceneDocumentService(
-            registry.GetService<IAssetDatabase>(),
+            assetDatabase,
             registry.GetService<IRuntimeSceneService>(),
             registry.GetService<ICommandManager>());
         m_SceneDocumentService.OperationFailed += OnSceneDocumentOperationFailed;
         registry.RegisterService<IEditorSceneDocumentService>(m_SceneDocumentService);
         m_WorldDocumentService = new EditorWorldDocumentService(
-            registry.GetService<IAssetDatabase>(),
+            assetDatabase,
             registry.GetService<IRuntimeWorldStreamingService>(),
             registry.GetService<ICommandManager>(),
             m_SceneDocumentService);
         m_WorldDocumentService.OperationFailed += OnWorldDocumentOperationFailed;
         registry.RegisterService<IEditorWorldDocumentService>(m_WorldDocumentService);
+        m_SceneViewFocusController = new EditorSceneViewFocusController(
+            m_WorldDocumentService,
+            registry.GetService<RenderSubsystem>(),
+            assetDatabase);
         registry.RegisterService<IApplicationHost>(this);
     }
 
 
     public void OnUnload(IServiceRegistry registry)
     {
+        m_SceneViewFocusController?.Dispose();
+        m_SceneViewFocusController = null;
         if (m_WorldDocumentService != null)
         {
             m_WorldDocumentService.OperationFailed -= OnWorldDocumentOperationFailed;

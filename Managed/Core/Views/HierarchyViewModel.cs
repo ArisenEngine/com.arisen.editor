@@ -362,6 +362,7 @@ internal sealed class HierarchyViewModel : EditorPanelBase
             default,
             "Persistent",
             "persistent",
+            includeEntities: true,
             reusableEntities,
             reusableGroups,
             refreshedEntities));
@@ -375,6 +376,7 @@ internal sealed class HierarchyViewModel : EditorPanelBase
                 cell.CellId,
                 title,
                 status,
+                cell.IsEditResident,
                 reusableEntities,
                 reusableGroups,
                 refreshedEntities));
@@ -417,6 +419,7 @@ internal sealed class HierarchyViewModel : EditorPanelBase
         WorldCellId cellId,
         string title,
         string status,
+        bool includeEntities,
         IReadOnlyDictionary<(Guid SceneGuid, WorldCellId CellId, Guid EntityGuid), SceneAssetEntityNodeViewModel> reusable,
         IReadOnlyDictionary<string, SceneNodeViewModel> reusableGroups,
         ICollection<SceneAssetEntityNodeViewModel> refreshed)
@@ -427,6 +430,12 @@ internal sealed class HierarchyViewModel : EditorPanelBase
             : CreateGroupNode(world, stableId, title);
         group.Name = title + (document.IsDirty ? " *" : string.Empty);
         group.Status = status;
+
+        if (!includeEntities)
+        {
+            SynchronizeByIdentity(group.Entities, Array.Empty<ReactiveObject>());
+            return group;
+        }
 
         var nodes = new List<SceneAssetEntityNodeViewModel>(document.Inspection.Entities.Count);
         foreach (SceneEntityInspection entity in document.Inspection.Entities)
@@ -497,7 +506,15 @@ internal sealed class HierarchyViewModel : EditorPanelBase
 
     private static string BuildCellStatus(EditorWorldCellDocumentState cell)
     {
-        string owner = cell.IsEditPinned ? "edit pin" : cell.Streaming.Desired ? "game" : string.Empty;
+        string owner = (cell.IsEditPinned || cell.Streaming.Pinned, cell.IsEditDependency, cell.IsRuntimeDesired) switch
+        {
+            (true, _, true) => "edit pin + runtime",
+            (true, _, false) => "edit pin",
+            (false, true, true) => "edit dependency + runtime",
+            (false, true, false) => "edit dependency",
+            (false, false, true) => "runtime",
+            _ => string.Empty
+        };
         return string.IsNullOrEmpty(owner)
             ? cell.Streaming.State.ToString()
             : $"{cell.Streaming.State} | {owner}";

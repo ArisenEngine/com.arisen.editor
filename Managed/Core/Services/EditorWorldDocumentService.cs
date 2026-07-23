@@ -61,6 +61,12 @@ internal sealed record EditorWorldCellDocumentState(
     public WorldCellId CellId => Descriptor.Id;
     public bool IsDirty => SceneDocument.IsDirty;
     public bool HasExternalChanges => SceneDocument.HasExternalChanges;
+    public bool IsRuntimeDesired =>
+        (Streaming.DesiredSources & WorldCellDesiredSource.Runtime) != 0;
+    public bool IsEditDependency =>
+        (Streaming.DesiredSources & WorldCellDesiredSource.EditDependency) != 0;
+    public bool IsEditResident =>
+        IsEditPinned && Streaming.State == WorldCellStreamingState.Active;
 }
 
 internal sealed record EditorWorldDocumentState(
@@ -261,6 +267,14 @@ internal sealed class EditorWorldDocumentService : IEditorWorldDocumentService
             {
                 return EditorWorldDocumentResult.Fail($"World cell '{cellId}' is not part of the active document.");
             }
+
+            if (!m_EditPins.Contains(cellId) ||
+                !m_CellStreaming.TryGetValue(cellId, out WorldCellStreamingSnapshot? streaming) ||
+                streaming.State != WorldCellStreamingState.Active)
+            {
+                return EditorWorldDocumentResult.Fail(
+                    $"World cell '{cellId}' must be active and pinned for editing before its entities can be changed.");
+            }
         }
 
         SceneAssetEditResult edit = SceneAssetLoader.UpdateEntityTransformSource(
@@ -430,7 +444,11 @@ internal sealed class EditorWorldDocumentService : IEditorWorldDocumentService
         }
 
         bool loaded = m_Streaming.PinCell(cellId);
-        lock (m_Gate) RefreshStateLocked();
+        lock (m_Gate)
+        {
+            if (!loaded) m_EditPins.Remove(cellId);
+            RefreshStateLocked();
+        }
         PublishState(Current);
         return loaded;
     }
@@ -445,7 +463,15 @@ internal sealed class EditorWorldDocumentService : IEditorWorldDocumentService
         }
 
         bool unloaded = m_Streaming.UnpinCell(cellId);
-        lock (m_Gate) RefreshStateLocked();
+        lock (m_Gate)
+        {
+            if (!unloaded) m_EditPins.Add(cellId);
+            else if (m_Selection is { } selection && selection.CellId == cellId)
+            {
+                m_Selection = null;
+            }
+            RefreshStateLocked();
+        }
         PublishState(Current);
         return unloaded;
     }
@@ -459,10 +485,11 @@ internal sealed class EditorWorldDocumentService : IEditorWorldDocumentService
             EditorWorldDocumentState? current = m_Current;
             WorldCellDescriptor? descriptor = current?.Descriptor.Cells.FirstOrDefault(cell => cell.Id == cellId);
             if (descriptor == null) return false;
+            WorldBounds focusBounds = descriptor.FocusBounds ?? descriptor.Bounds;
             center = new WorldPosition(
-                (descriptor.Bounds.Min.X + descriptor.Bounds.Max.X) * 0.5,
-                (descriptor.Bounds.Min.Y + descriptor.Bounds.Max.Y) * 0.5,
-                (descriptor.Bounds.Min.Z + descriptor.Bounds.Max.Z) * 0.5);
+                (focusBounds.Min.X + focusBounds.Max.X) * 0.5,
+                (focusBounds.Min.Y + focusBounds.Max.Y) * 0.5,
+                (focusBounds.Min.Z + focusBounds.Max.Z) * 0.5);
             m_SelectedCellId = cellId;
             m_FocusedCellId = cellId;
             RefreshStateLocked();
@@ -479,6 +506,7 @@ internal sealed class EditorWorldDocumentService : IEditorWorldDocumentService
         {
             ThrowIfDisposed();
             if (m_Current?.Descriptor.Cells.Any(cell => cell.Id == cellId) != true) return;
+            if (m_SelectedCellId == cellId) return;
             m_SelectedCellId = cellId;
             RefreshStateLocked();
         }
@@ -1150,6 +1178,7 @@ internal sealed class EditorWorldDocumentService : IEditorWorldDocumentService
             0,
             0,
             false,
+            WorldCellDesiredSource.None,
             false,
             false,
             RuntimeSceneInstanceId.Invalid,

@@ -184,6 +184,59 @@ public class AssetDatabase : IDisposable
         }
     }
 
+    public int PruneMissingAssets(string workspaceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+        {
+            throw new ArgumentException("Workspace root cannot be empty.", nameof(workspaceRoot));
+        }
+
+        var fullWorkspaceRoot = Path.GetFullPath(workspaceRoot);
+        var missingGuids = new List<Guid>();
+        using (var command = _connection.CreateCommand())
+        {
+            command.CommandText = "SELECT Guid, Path FROM Assets";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!Guid.TryParse(reader.GetString(0), out var guid))
+                {
+                    continue;
+                }
+
+                var registeredPath = reader.GetString(1);
+                var sourcePath = Path.IsPathFullyQualified(registeredPath)
+                    ? registeredPath
+                    : Path.Combine(
+                        fullWorkspaceRoot,
+                        registeredPath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(Path.GetFullPath(sourcePath)))
+                {
+                    missingGuids.Add(guid);
+                }
+            }
+        }
+
+        if (missingGuids.Count == 0)
+        {
+            return 0;
+        }
+
+        using var transaction = _connection.BeginTransaction();
+        using var delete = _connection.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = "DELETE FROM Assets WHERE Guid = $guid";
+        var guidParameter = delete.Parameters.Add("$guid", SqliteType.Text);
+        foreach (var guid in missingGuids)
+        {
+            guidParameter.Value = guid.ToString();
+            delete.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return missingGuids.Count;
+    }
+
     private void EnsureColumn(string name, string type)
     {
         using var check = _connection.CreateCommand();

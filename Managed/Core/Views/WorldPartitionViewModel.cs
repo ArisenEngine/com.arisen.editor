@@ -23,11 +23,15 @@ internal sealed class WorldPartitionCellViewModel : ReactiveObject
     public string Layer => m_State.Descriptor.Key.Layer;
     public string SceneName => m_State.SceneDocument.Name;
     public string State => m_State.Streaming.State.ToString();
-    public string Ownership => m_State.IsEditPinned
-        ? "Edit pin"
-        : m_State.Streaming.Desired
-            ? "Game desired"
-            : "None";
+    public string Ownership => (m_State.IsEditPinned || m_State.Streaming.Pinned, m_State.IsEditDependency, m_State.IsRuntimeDesired) switch
+    {
+        (true, _, true) => "Edit pin + runtime",
+        (true, _, false) => "Edit pin",
+        (false, true, true) => "Edit dependency + runtime",
+        (false, true, false) => "Edit dependency",
+        (false, false, true) => "Runtime desired",
+        _ => "None"
+    };
     public string Dirty => m_State.IsDirty ? "*" : string.Empty;
     public string Diagnostic => m_State.Streaming.Diagnostic;
     public bool IsEditPinned => m_State.IsEditPinned;
@@ -58,6 +62,7 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
     private string m_WorldName = "No active world";
     private string m_StatusText = string.Empty;
     private string m_MetricsText = string.Empty;
+    private bool m_IsApplyingState;
 
     public override string Title => "World Partition";
     public override string Id => "WorldPartition";
@@ -70,10 +75,19 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
         get => m_SelectedCell;
         set
         {
+            if (ReferenceEquals(m_SelectedCell, value)) return;
             this.RaiseAndSetIfChanged(ref m_SelectedCell, value);
-            if (value != null) m_Documents?.SelectCell(value.CellId);
+            this.RaisePropertyChanged(nameof(HasSelectedCell));
+            if (!m_IsApplyingState &&
+                value != null &&
+                m_Documents?.Current?.SelectedCellId != value.CellId)
+            {
+                m_Documents?.SelectCell(value.CellId);
+            }
         }
     }
+
+    public bool HasSelectedCell => m_SelectedCell != null;
 
     public string WorldName
     {
@@ -93,8 +107,6 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
         private set => this.RaiseAndSetIfChanged(ref m_MetricsText, value);
     }
 
-    public IReactiveCommand LoadCommand { get; }
-    public IReactiveCommand UnloadCommand { get; }
     public IReactiveCommand PinCommand { get; }
     public IReactiveCommand FocusCommand { get; }
     public IReactiveCommand SaveAllCommand { get; }
@@ -112,12 +124,6 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
             ShowState(m_Documents.Current);
         }
 
-        LoadCommand = ReactiveCommand.Create(() => RunSelected(
-            cell => m_Documents?.LoadCellForEditing(cell.CellId) == true,
-            "Cell load requested."));
-        UnloadCommand = ReactiveCommand.Create(() => RunSelected(
-            cell => m_Documents?.UnloadCellForEditing(cell.CellId) == true,
-            "Cell unload requested."));
         PinCommand = ReactiveCommand.Create(() =>
         {
             if (SelectedCell == null || m_Documents == null) return;
@@ -128,7 +134,7 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
         });
         FocusCommand = ReactiveCommand.Create(() => RunSelected(
             cell => m_Documents?.FocusCell(cell.CellId) == true,
-            "Focused selected cell."));
+            "Focused SceneView on selected cell; residency is unchanged."));
         SaveAllCommand = ReactiveCommand.Create(() =>
         {
             if (m_Documents == null) return;
@@ -199,43 +205,72 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
 
     private void ShowState(EditorWorldDocumentState? state)
     {
-        if (state == null)
+        m_IsApplyingState = true;
+        try
         {
-            WorldName = "No active world";
-            MetricsText = string.Empty;
-            Cells.Clear();
-            SelectedCell = null;
-            return;
-        }
-
-        WorldName = state.Name + (state.IsDirty ? " *" : string.Empty);
-        MetricsText =
-            $"Active {state.Metrics.ActiveCells}  Queued {state.Metrics.QueuedCells}  " +
-            $"I/O {FormatBytes(state.Metrics.BytesInFlight)}  " +
-            $"Staging {FormatBytes(state.Metrics.DecodedStagingBytes)}  " +
-            $"Failures {state.Metrics.FailedCells}";
-
-        var byId = Cells.ToDictionary(cell => cell.CellId);
-        var desired = new List<WorldPartitionCellViewModel>(state.Cells.Count);
-        foreach (EditorWorldCellDocumentState cell in state.Cells)
-        {
-            if (!byId.TryGetValue(cell.CellId, out WorldPartitionCellViewModel? viewModel))
+            if (state == null)
             {
-                viewModel = new WorldPartitionCellViewModel(cell);
+                WorldName = "No active world";
+                MetricsText = string.Empty;
+                Cells.Clear();
+                SelectedCell = null;
+                return;
             }
-            else
+
+            WorldName = state.Name + (state.IsDirty ? " *" : string.Empty);
+            MetricsText =
+                $"Active {state.Metrics.ActiveCells}  Queued {state.Metrics.QueuedCells}  " +
+                $"I/O {FormatBytes(state.Metrics.BytesInFlight)}  " +
+                $"Staging {FormatBytes(state.Metrics.DecodedStagingBytes)}  " +
+                $"Failures {state.Metrics.FailedCells}";
+
+            WorldCellId previousSelection = SelectedCell?.CellId ?? default;
+            var byId = Cells.ToDictionary(cell => cell.CellId);
+            var desired = new List<WorldPartitionCellViewModel>(state.Cells.Count);
+            foreach (EditorWorldCellDocumentState cell in state.Cells)
             {
-                viewModel.Update(cell);
+                if (!byId.TryGetValue(cell.CellId, out WorldPartitionCellViewModel? viewModel))
+                {
+                    viewModel = new WorldPartitionCellViewModel(cell);
+                }
+                else
+                {
+                    viewModel.Update(cell);
+                }
+                desired.Add(viewModel);
             }
-            desired.Add(viewModel);
-        }
-        Cells.Clear();
-        foreach (WorldPartitionCellViewModel cell in desired) Cells.Add(cell);
-        SelectedCell = state.SelectedCellId.IsValid
-            ? Cells.FirstOrDefault(cell => cell.CellId == state.SelectedCellId)
-            : SelectedCell != null
-                ? Cells.FirstOrDefault(cell => cell.CellId == SelectedCell.CellId)
+            SynchronizeCells(Cells, desired);
+            WorldCellId selectedId = state.SelectedCellId.IsValid
+                ? state.SelectedCellId
+                : previousSelection;
+            SelectedCell = selectedId.IsValid
+                ? Cells.FirstOrDefault(cell => cell.CellId == selectedId)
                 : null;
+        }
+        finally
+        {
+            m_IsApplyingState = false;
+        }
+    }
+
+    private static void SynchronizeCells(
+        ObservableCollection<WorldPartitionCellViewModel> target,
+        IReadOnlyList<WorldPartitionCellViewModel> desired)
+    {
+        for (int index = 0; index < desired.Count; index++)
+        {
+            WorldPartitionCellViewModel item = desired[index];
+            if (index < target.Count && ReferenceEquals(target[index], item)) continue;
+
+            int existingIndex = target.IndexOf(item);
+            if (existingIndex >= 0) target.Move(existingIndex, index);
+            else target.Insert(index, item);
+        }
+
+        while (target.Count > desired.Count)
+        {
+            target.RemoveAt(target.Count - 1);
+        }
     }
 
     private static string FormatBytes(long value)
