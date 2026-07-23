@@ -93,6 +93,7 @@ internal sealed class EditorViewportSmokeSession : IDisposable
     private readonly TabControl m_Tabs;
     private readonly Window m_Window;
     private IEditorWorldDocumentService? m_WorldDocuments;
+    private WorldPartitionViewModel? m_WorldPartitionViewModel;
     private WorldCellId m_WorldCellId;
     private bool m_WorldValidationStarted;
     private bool m_WorldUnloadRequested;
@@ -177,6 +178,8 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         EditorViewportPresentationDiagnostics.Presented -= OnPresented;
         m_Window.Closed -= OnWindowClosed;
         DetachWorldDocuments();
+        m_WorldPartitionViewModel?.Dispose();
+        m_WorldPartitionViewModel = null;
     }
 
     private void OnPresented(EditorViewportPresentationObservation observation)
@@ -287,6 +290,20 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             .First();
         m_WorldDocuments = documents;
         m_WorldCellId = cell.CellId;
+        m_WorldPartitionViewModel = new WorldPartitionViewModel();
+        WorldPartitionCellViewModel? panelCell = m_WorldPartitionViewModel.Cells
+            .FirstOrDefault(candidate => candidate.CellId == cell.CellId);
+        if (panelCell == null)
+        {
+            m_State.Fail($"The World Partition panel did not expose smoke cell '{cell.CellId}'.");
+            return;
+        }
+        m_WorldPartitionViewModel.SelectedCell = panelCell;
+        if (documents.Current?.SelectedCellId != cell.CellId)
+        {
+            m_State.Fail($"The World Partition panel did not publish selection for cell '{cell.CellId}'.");
+            return;
+        }
         m_State.ObserveWorldFirstOpen(world.World.Guid, world.Cells.Count, cell.CellId.Value);
         if (m_State.IsComplete && !m_State.Succeeded)
         {

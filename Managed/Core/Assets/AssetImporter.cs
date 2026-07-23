@@ -127,7 +127,7 @@ public class AssetImporter : IDisposable
                 changed = true;
             }
 
-            if (!string.IsNullOrWhiteSpace(meta.ImporterType))
+            if (meta.HasLegacyImporterType)
             {
                 meta.ImporterType = null;
                 changed = true;
@@ -247,10 +247,22 @@ public class AssetImporter : IDisposable
         }
     }
 
-    private void ProcessDeletedFile(string filePath)
+    internal void ProcessDeletedFile(string filePath)
     {
         if (!AssetPathPolicy.IsUnderAssetsRoot(filePath, _assetsDirectory))
         {
+            return;
+        }
+
+        // Atomic replacement can queue Deleted before the replacement Created/Renamed
+        // event. Filesystem state at processing time is authoritative.
+        if (File.Exists(filePath))
+        {
+            ProcessFile(
+                filePath,
+                publishEvent: true,
+                RuntimeAssetChangeKind.Changed,
+                throwOnFailure: true);
             return;
         }
 

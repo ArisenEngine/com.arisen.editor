@@ -36,6 +36,12 @@ public class AssetDatabaseService : IDisposable
         
         ArisenEngine.Core.Diagnostics.Logger.Log($"[AssetDatabaseService] Initializing DB at: {dbPath}");
         EditorAssetDatabase.Initialize(dbPath);
+        int prunedAssetCount = EditorAssetDatabase.Instance.PruneMissingAssets(projectRoot);
+        if (prunedAssetCount > 0)
+        {
+            ArisenEngine.Core.Diagnostics.Logger.Log(
+                $"[AssetDatabaseService] Pruned {prunedAssetCount} missing source asset(s) from the persistent index.");
+        }
 
         // 1. Collect all potential roots and filter out overlapping ones
         string assetsRoot = Path.GetFullPath(Path.Combine(projectRoot, "Assets"));

@@ -19,28 +19,43 @@
                     <TextBlock Text="{Binding MetricsText}" Foreground="#94a3b8" FontSize="11"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
-                    <Button Command="{Binding LoadCommand}" Width="28" Height="26" ToolTip.Tip="Load cell for editing">
-                        <PathIcon Data="{StaticResource PlayIcon}" Width="14" Height="14"/>
-                    </Button>
-                    <Button Command="{Binding UnloadCommand}" Width="28" Height="26" ToolTip.Tip="Unload editor cell pin">
-                        <PathIcon Data="{StaticResource StopIcon}" Width="14" Height="14"/>
-                    </Button>
-                    <Button Command="{Binding PinCommand}" Width="28" Height="26" ToolTip.Tip="Toggle edit pin">
+                    <ToggleButton Command="{Binding PinCommand}"
+                                  IsChecked="{Binding SelectedCell.IsEditPinned, Mode=OneWay}"
+                                  IsEnabled="{Binding HasSelectedCell}"
+                                  Width="28"
+                                  Height="26"
+                                  ToolTip.Tip="Keep selected cell loaded for editing">
                         <PathIcon Data="{StaticResource CheckIcon}" Width="14" Height="14"/>
-                    </Button>
-                    <Button Command="{Binding FocusCommand}" Width="28" Height="26" ToolTip.Tip="Focus cell">
+                    </ToggleButton>
+                    <Button Command="{Binding FocusCommand}"
+                            IsEnabled="{Binding HasSelectedCell}"
+                            Width="28"
+                            Height="26"
+                            ToolTip.Tip="Focus selected cell">
                         <PathIcon Data="{StaticResource SearchIcon}" Width="14" Height="14"/>
                     </Button>
                     <Button Command="{Binding SaveAllCommand}" Width="28" Height="26" ToolTip.Tip="Save all world documents">
                         <PathIcon Data="{StaticResource SaveAllIcon}" Width="14" Height="14"/>
                     </Button>
-                    <Button Command="{Binding ReimportCommand}" Width="28" Height="26" ToolTip.Tip="Reimport selected cell">
+                    <Button Command="{Binding ReimportCommand}"
+                            IsEnabled="{Binding HasSelectedCell}"
+                            Width="28"
+                            Height="26"
+                            ToolTip.Tip="Reimport selected cell">
                         <PathIcon Data="{StaticResource RefreshIcon}" Width="14" Height="14"/>
                     </Button>
-                    <Button Command="{Binding RetryCommand}" Width="28" Height="26" ToolTip.Tip="Retry failed cell">
+                    <Button Command="{Binding RetryCommand}"
+                            IsEnabled="{Binding HasSelectedCell}"
+                            Width="28"
+                            Height="26"
+                            ToolTip.Tip="Retry failed cell">
                         <PathIcon Data="{StaticResource RedoIcon}" Width="14" Height="14"/>
                     </Button>
-                    <Button Command="{Binding MoveSelectedEntityCommand}" Width="28" Height="26" ToolTip.Tip="Move selected hierarchy entity to this cell">
+                    <Button Command="{Binding MoveSelectedEntityCommand}"
+                            IsEnabled="{Binding HasSelectedCell}"
+                            Width="28"
+                            Height="26"
+                            ToolTip.Tip="Move selected hierarchy entity to this cell">
                         <PathIcon Data="{StaticResource ChevronRightIcon}" Width="14" Height="14"/>
                     </Button>
                 </StackPanel>
@@ -68,7 +83,7 @@
                 <DataGridTextColumn Header="Layer" Binding="{Binding Layer}" Width="90"/>
                 <DataGridTextColumn Header="Scene" Binding="{Binding SceneName}" Width="*" MinWidth="140"/>
                 <DataGridTextColumn Header="State" Binding="{Binding State}" Width="130"/>
-                <DataGridTextColumn Header="Owner" Binding="{Binding Ownership}" Width="100"/>
+                <DataGridTextColumn Header="Owner" Binding="{Binding Ownership}" Width="180"/>
                 <DataGridTextColumn Header="Dirty" Binding="{Binding Dirty}" Width="48"/>
                 <DataGridTextColumn Header="Diagnostic" Binding="{Binding Diagnostic}" Width="2*" MinWidth="180"/>
             </DataGrid.Columns>

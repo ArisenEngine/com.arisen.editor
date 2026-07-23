@@ -8,13 +8,27 @@ namespace ArisenEditor.Core.Assets;
 /// </summary>
 public class AssetMetadata
 {
+    private string? m_ImporterType;
+
     public Guid Guid { get; set; } = Guid.NewGuid();
 
     public string AssetType { get; set; } = string.Empty;
 
     public string Importer { get; set; } = string.Empty;
 
-    public string? ImporterType { get; set; }
+    [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
+    public string? ImporterType
+    {
+        get => m_ImporterType;
+        set
+        {
+            m_ImporterType = value;
+            HasLegacyImporterType = true;
+        }
+    }
+
+    [YamlIgnore]
+    public bool HasLegacyImporterType { get; private set; }
 
     [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
     public GeneratedAssetMetadata? Generated { get; set; }

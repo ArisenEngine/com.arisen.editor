@@ -47,7 +47,7 @@
                     BorderBrush="#64748b"
                     BorderThickness="1"
                     CornerRadius="4">
-                <views:WorldPartitionOverlayControl/>
+                <views:WorldPartitionOverlayControl Cursor="Hand"/>
             </Border>
         </StackPanel>
     </Grid>
