@@ -13,6 +13,11 @@ public class DefaultPanelFactory : IPanelFactory
         _registry[id] = factory;
     }
 
+    public virtual bool UnregisterPanel(string id)
+    {
+        return _registry.Remove(id);
+    }
+
     public virtual IEditorPanel CreatePanel(string panelId)
     {
         if (_registry.TryGetValue(panelId, out var factory))

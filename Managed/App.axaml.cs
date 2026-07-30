@@ -22,6 +22,7 @@ using ReactiveUI;
 using System.IO;
 using ArisenEditor.Core.Services;
 using ArisenEditor.Core.Validation;
+using ArisenEditorFramework.Extensions;
 using ArisenKernel.Diagnostics;
 using Avalonia.Threading;
 
@@ -32,6 +33,27 @@ namespace ArisenEditor
         internal static IThemeManager? ThemeManager;
         private static ArisenEditor.Core.Lifecycle.EditorEngineRunner? s_EngineRunner;
         private static EditorViewportSmokeSession? s_ViewportSmokeSession;
+        private static IEditorExtension[] s_EditorExtensions = Array.Empty<IEditorExtension>();
+        private static EditorExtensionHost? s_EditorExtensionHost;
+        private static Action? s_EndEditorExtensionActivation;
+
+        internal static void SetEditorExtensions(
+            IEditorExtension[] extensions,
+            Action endEditorExtensionActivation)
+        {
+            s_EditorExtensions = extensions ?? throw new ArgumentNullException(nameof(extensions));
+            s_EndEditorExtensionActivation = endEditorExtensionActivation ??
+                throw new ArgumentNullException(nameof(endEditorExtensionActivation));
+        }
+
+        internal static void ClearEditorExtensions()
+        {
+            s_EditorExtensionHost?.Dispose();
+            s_EditorExtensionHost = null;
+            s_EndEditorExtensionActivation?.Invoke();
+            s_EndEditorExtensionActivation = null;
+            s_EditorExtensions = Array.Empty<IEditorExtension>();
+        }
         
         public override void Initialize()
         {
@@ -55,6 +77,7 @@ namespace ArisenEditor
 
                 desktop.Exit += (sender, args) => 
                 {
+                    ClearEditorExtensions();
                     s_ViewportSmokeSession?.Dispose();
                     s_EngineRunner?.Stop();
                 };
@@ -188,7 +211,15 @@ namespace ArisenEditor
                 }
 
                 var options = EditorViewportSmokeOptions.Parse(args, projectSubsystem.ProjectDir);
-                s_ViewportSmokeSession = new EditorViewportSmokeSession(desktop, options);
+                var panelFactory = new ArisenPanelFactory();
+                panelFactory.Initialize();
+                s_EditorExtensionHost?.Dispose();
+                s_EditorExtensionHost = new EditorExtensionHost(panelFactory, s_EditorExtensions);
+                s_ViewportSmokeSession = new EditorViewportSmokeSession(
+                    desktop,
+                    options,
+                    panelFactory,
+                    s_EditorExtensionHost.Panels);
                 s_EngineRunner = new ArisenEditor.Core.Lifecycle.EditorEngineRunner();
                 s_ViewportSmokeSession.Start(() =>
                 {
@@ -326,8 +357,10 @@ namespace ArisenEditor
             
             var panelFactory = new ArisenPanelFactory();
             panelFactory.Initialize();
-            
-            var viewModel = new MainDockViewModel(panelFactory);
+            s_EditorExtensionHost?.Dispose();
+            s_EditorExtensionHost = new EditorExtensionHost(panelFactory, s_EditorExtensions);
+
+            var viewModel = new MainDockViewModel(panelFactory, s_EditorExtensionHost.Panels);
             var window = new Window
             {
                 Title = $"Arisen Editor - {metadata.Name}",

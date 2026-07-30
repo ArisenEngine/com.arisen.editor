@@ -56,8 +56,11 @@ internal sealed class WorldPartitionCellViewModel : ReactiveObject
 
 internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
 {
+    private const string ScenePanelId = "Scene";
+
     private readonly IEditorWorldDocumentService? m_Documents;
     private readonly SelectionService? m_SelectionService;
+    private readonly Func<string, bool>? m_ActivatePanel;
     private WorldPartitionCellViewModel? m_SelectedCell;
     private string m_WorldName = "No active world";
     private string m_StatusText = string.Empty;
@@ -114,9 +117,12 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
     public IReactiveCommand RetryCommand { get; }
     public IReactiveCommand MoveSelectedEntityCommand { get; }
 
-    public WorldPartitionViewModel(SelectionService? selectionService = null)
+    public WorldPartitionViewModel(
+        SelectionService? selectionService = null,
+        Func<string, bool>? activatePanel = null)
     {
         m_SelectionService = selectionService;
+        m_ActivatePanel = activatePanel;
         ArisenKernel.Lifecycle.EngineKernel.Instance.Services.TryGetService(out m_Documents);
         if (m_Documents != null)
         {
@@ -132,9 +138,7 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
                 : m_Documents.LoadCellForEditing(SelectedCell.CellId);
             StatusText = success ? "Cell edit pin updated." : "Cell pin request was rejected.";
         });
-        FocusCommand = ReactiveCommand.Create(() => RunSelected(
-            cell => m_Documents?.FocusCell(cell.CellId) == true,
-            "Focused SceneView on selected cell; residency is unchanged."));
+        FocusCommand = ReactiveCommand.Create(FocusSelectedCell);
         SaveAllCommand = ReactiveCommand.Create(() =>
         {
             if (m_Documents == null) return;
@@ -186,16 +190,21 @@ internal sealed class WorldPartitionViewModel : EditorPanelBase, IDisposable
             .Diagnostic;
     }
 
-    private void RunSelected(
-        Func<WorldPartitionCellViewModel, bool> operation,
-        string success)
+    private void FocusSelectedCell()
     {
         if (SelectedCell == null)
         {
             StatusText = "Select a world cell first.";
             return;
         }
-        StatusText = operation(SelectedCell) ? success : "Cell operation was rejected.";
+        if (m_Documents?.FocusCell(SelectedCell.CellId) != true)
+        {
+            StatusText = "Cell focus request was rejected.";
+            return;
+        }
+
+        m_ActivatePanel?.Invoke(ScenePanelId);
+        StatusText = "Focused Scene view on selected cell; residency is unchanged.";
     }
 
     private void OnStateChanged(EditorWorldDocumentState? state)

@@ -31,7 +31,7 @@
                             IsEnabled="{Binding HasSelectedCell}"
                             Width="28"
                             Height="26"
-                            ToolTip.Tip="Focus selected cell">
+                            ToolTip.Tip="Focus selected cell in Scene view">
                         <PathIcon Data="{StaticResource SearchIcon}" Width="14" Height="14"/>
                     </Button>
                     <Button Command="{Binding SaveAllCommand}" Width="28" Height="26" ToolTip.Tip="Save all world documents">

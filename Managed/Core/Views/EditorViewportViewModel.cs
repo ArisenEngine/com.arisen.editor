@@ -1,10 +1,15 @@
 using System;
 using System.ComponentModel;
 using System.Numerics;
+using System.Threading.Tasks;
 using Avalonia.Media;
+using Avalonia.Threading;
 using ArisenEditor.Core.Services;
 using ReactiveUI;
 using ArisenEngine.Rendering;
+using ArisenKernel.Contracts;
+using ArisenKernel.Diagnostics;
+using ArisenKernel.Lifecycle;
 
 namespace ArisenEditor.ViewModels;
 
@@ -25,6 +30,11 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
     private string m_SelectedSceneEntityName = string.Empty;
     private string m_SelectedSceneEntitySummary = string.Empty;
     private string m_SelectedSceneEntityPosition = string.Empty;
+    private bool m_IsRenderDocCaptureAvailable;
+    private string m_RenderDocActionText = "Enable RenderDoc";
+    private string m_RenderDocCaptureStatus = string.Empty;
+    private bool m_RenderDocActionInProgress;
+    private readonly IGraphicsDeviceLifecycleService? m_GraphicsDeviceLifecycle;
     private IImage? _viewportImage;
 
     /// <summary>
@@ -88,14 +98,84 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
         set => this.RaiseAndSetIfChanged(ref _clearColor, value);
     }
 
-    public void Capture()
+    public bool IsRenderDocCaptureAvailable
     {
-        RenderDocService.Instance.TriggerCapture();
+        get => m_IsRenderDocCaptureAvailable;
+        private set => this.RaiseAndSetIfChanged(ref m_IsRenderDocCaptureAvailable, value);
+    }
+
+    public string RenderDocCaptureStatus
+    {
+        get => m_RenderDocCaptureStatus;
+        private set => this.RaiseAndSetIfChanged(ref m_RenderDocCaptureStatus, value);
+    }
+
+    public string RenderDocActionText
+    {
+        get => m_RenderDocActionText;
+        private set => this.RaiseAndSetIfChanged(ref m_RenderDocActionText, value);
+    }
+
+    public async Task ExecuteRenderDocActionAsync()
+    {
+        if (!IsRenderDocCaptureAvailable || m_RenderDocActionInProgress)
+        {
+            return;
+        }
+
+        var renderDoc = RenderDocService.Instance;
+        if (renderDoc.IsAvailable)
+        {
+            if (!renderDoc.TryTriggerCapture())
+            {
+                RefreshRenderDocCaptureState();
+            }
+            return;
+        }
+
+        if (m_GraphicsDeviceLifecycle == null)
+        {
+            RefreshRenderDocCaptureState();
+            return;
+        }
+
+        m_RenderDocActionInProgress = true;
+        RefreshRenderDocCaptureState();
+        try
+        {
+            GraphicsDeviceRestartResult result = await m_GraphicsDeviceLifecycle.RestartAsync(
+                new RHIBackendRestartOptions(RHIBackendDiagnosticMode.RenderDoc));
+            if (!result.Succeeded)
+            {
+                KernelLog.Error(
+                    $"[EditorViewport] RenderDoc graphics restart failed: {result.Diagnostic}");
+            }
+        }
+        catch (Exception exception)
+        {
+            KernelLog.Error(
+                $"[EditorViewport] RenderDoc graphics restart failed: {exception.Message}");
+        }
+        finally
+        {
+            m_RenderDocActionInProgress = false;
+            RefreshRenderDocCaptureState();
+        }
     }
 
     public EditorViewportViewModel(bool isSceneView, ISelectionService? selectionService = null)
     {
         IsSceneView = isSceneView;
+        if (EngineKernel.Instance.Services.TryGetService<IGraphicsDeviceLifecycleService>(
+                out var graphicsDeviceLifecycle))
+        {
+            m_GraphicsDeviceLifecycle = graphicsDeviceLifecycle;
+        }
+        if (m_GraphicsDeviceLifecycle != null)
+        {
+            m_GraphicsDeviceLifecycle.StateChanged += OnGraphicsDeviceLifecycleStateChanged;
+        }
+        RefreshRenderDocCaptureState();
         m_SelectionService = isSceneView ? selectionService : null;
         if (m_SelectionService != null)
         {
@@ -105,6 +185,51 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
 
         // In the future, this is where we will hook up `Avalonia.Platform.Interop.IExternalMemory`
         // or a `WriteableBitmap` bound to the Shared Handle exported by Arisen Engine's RHI.
+    }
+
+    private void RefreshRenderDocCaptureState()
+    {
+        var renderDoc = RenderDocService.Instance;
+        bool renderDocAvailable = renderDoc.IsAvailable;
+        GraphicsDeviceLifecycleSnapshot? lifecycle = m_GraphicsDeviceLifecycle?.Snapshot;
+        bool lifecycleRunning = lifecycle == null ||
+            lifecycle.Value.State == GraphicsDeviceLifecycleState.Running;
+
+        RenderDocActionText = renderDocAvailable ? "Capture Frame" : "Enable RenderDoc";
+        IsRenderDocCaptureAvailable =
+            !m_RenderDocActionInProgress &&
+            lifecycleRunning &&
+            (renderDocAvailable || m_GraphicsDeviceLifecycle != null);
+
+        if (lifecycle.HasValue &&
+            lifecycle.Value.State != GraphicsDeviceLifecycleState.Running)
+        {
+            GraphicsDeviceLifecycleSnapshot snapshot = lifecycle.Value;
+            RenderDocCaptureStatus = snapshot.State == GraphicsDeviceLifecycleState.Failed
+                ? $"Graphics restart failed: {snapshot.Diagnostic}"
+                : $"Graphics device: {snapshot.State}.";
+        }
+        else if (!renderDocAvailable && m_GraphicsDeviceLifecycle != null)
+        {
+            RenderDocCaptureStatus =
+                "Enable RenderDoc by recreating the graphics device while keeping the Editor open.";
+        }
+        else
+        {
+            RenderDocCaptureStatus = renderDoc.AvailabilityDiagnostic;
+        }
+    }
+
+    private void OnGraphicsDeviceLifecycleStateChanged(
+        GraphicsDeviceLifecycleSnapshot snapshot)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            RefreshRenderDocCaptureState();
+            return;
+        }
+
+        Dispatcher.UIThread.Post(RefreshRenderDocCaptureState, DispatcherPriority.Loaded);
     }
 
     public void SetViewportSize(double width, double height)
@@ -124,6 +249,10 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
 
     public void Dispose()
     {
+        if (m_GraphicsDeviceLifecycle != null)
+        {
+            m_GraphicsDeviceLifecycle.StateChanged -= OnGraphicsDeviceLifecycleStateChanged;
+        }
         if (m_SelectionService != null)
         {
             m_SelectionService.SelectionChanged -= OnSelectionChanged;

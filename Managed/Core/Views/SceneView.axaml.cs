@@ -8,6 +8,7 @@ namespace ArisenEditor.Views;
 public partial class SceneView : UserControl
 {
     private EditorViewportView? m_Viewport;
+    private readonly List<Control> m_ExtensionOverlays = new();
 
     internal bool HasWorldPartitionOverlayVisual =>
         WorldPartitionOverlayHost.Parent != null &&
@@ -38,6 +39,17 @@ public partial class SceneView : UserControl
             SceneViewContainer.Children.Remove(m_Viewport);
             m_Viewport = null;
         }
+
+        for (int index = m_ExtensionOverlays.Count - 1; index >= 0; index--)
+        {
+            Control overlay = m_ExtensionOverlays[index];
+            ExtensionOverlayHost.Children.Remove(overlay);
+            if (overlay is IDisposable overlayDisposable)
+            {
+                overlayDisposable.Dispose();
+            }
+        }
+        m_ExtensionOverlays.Clear();
     }
 
     private void LoadViewport()
@@ -48,6 +60,15 @@ public partial class SceneView : UserControl
         }
 
         var sceneViewModel = DataContext as SceneViewModel;
+        if (sceneViewModel != null && m_ExtensionOverlays.Count == 0)
+        {
+            foreach (var registration in sceneViewModel.SceneViewOverlays)
+            {
+                Control overlay = registration.Factory();
+                m_ExtensionOverlays.Add(overlay);
+                ExtensionOverlayHost.Children.Add(overlay);
+            }
+        }
         m_Viewport = new EditorViewportView
         {
             DataContext = new EditorViewportViewModel(

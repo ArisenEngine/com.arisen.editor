@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using ArisenEditor.Core.Factory;
 using ArisenEditor.Core.Services;
+using ArisenEditorFramework.Extensions;
 using ArisenKernel.Lifecycle;
 using Dock.Model.Controls;
 using Dock.Model.Core;
@@ -45,14 +47,20 @@ internal class MainDockViewModel : ReactiveObject
     public MenuItemBarViewModel MenuViewModel { get; }
     public Dock.Model.Core.IFactory Factory => m_LayoutManager.Factory;
     
-    internal MainDockViewModel(ArisenEditorFramework.Core.IPanelFactory? panelFactory = null)
+    internal MainDockViewModel(
+        ArisenEditorFramework.Core.IPanelFactory? panelFactory = null,
+        IReadOnlyList<EditorPanelRegistration>? extensionPanels = null)
     {
         EngineKernel.Instance.Services.TryGetService(out m_SceneDocumentService);
         MenuViewModel = new MenuItemBarViewModel();
-        m_LayoutManager = new ArisenEditorFramework.Docking.LayoutManager();
+        m_LayoutManager = new ArisenEditorFramework.Docking.LayoutManager(extensionPanels);
         if (panelFactory != null)
         {
             m_LayoutManager.PanelFactory = panelFactory;
+            if (panelFactory is ArisenPanelFactory arisenPanelFactory)
+            {
+                arisenPanelFactory.PanelActivator = m_LayoutManager.ActivatePanel;
+            }
         }
         
         m_LayoutManager.Initialize();
