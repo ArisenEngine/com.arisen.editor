@@ -15,11 +15,13 @@
         "interface": "ArisenKernel.Contracts.IApplicationHost",
         "priority": 100
       },
+      "ArisenEditorFramework.Extensions.IEditorExtensionRegistry",
       "ArisenEditor.Core.Services.IEditorSceneDocumentService",
       "ArisenEditor.Core.Services.IEditorWorldDocumentService"
     ],
     "requires": [
       "ArisenKernel.Contracts.IRHIBackend",
+      "ArisenEngine.Rendering.IGraphicsDeviceLifecycleService",
       "ArisenEngine.Resources.Serialization.IRuntimeSceneService",
       "ArisenEngine.Resources.Serialization.IRuntimeWorldStreamingService",
       "ArisenEngine.Core.Assets.IAssetDatabase",

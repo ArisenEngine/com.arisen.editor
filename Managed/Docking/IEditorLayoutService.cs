@@ -6,6 +6,11 @@ namespace ArisenEditorFramework.Docking;
 public interface IEditorLayoutService
 {
     /// <summary>
+    /// Activates and focuses an existing panel in the current layout.
+    /// </summary>
+    bool ActivatePanel(string panelId);
+
+    /// <summary>
     /// Adds or focuses a registered custom window in the layout.
     /// </summary>
     void OpenWindow(IEditorWindow window);

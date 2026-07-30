@@ -26,29 +26,37 @@
         </Style>
     </UserControl.Styles>
     <Grid x:Name="SceneViewContainer" Background="Transparent">
-        <StackPanel x:Name="WorldPartitionOverlayHost"
-                    Margin="10,48,10,10"
-                    Spacing="4"
+        <StackPanel Margin="10,48,10,10"
+                    Spacing="6"
+                    Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Top"
                     ZIndex="10">
-            <ToggleButton x:Name="WorldPartitionOverlayToggle"
-                          Classes="world-partition-toggle"
-                          IsChecked="{Binding IsWorldPartitionOverlayVisible, Mode=TwoWay}"
-                          ToolTip.Tip="Toggle world partition overlay">
-                <PathIcon Data="{StaticResource SceneIcon}" Width="16" Height="16"/>
-            </ToggleButton>
-            <Border x:Name="WorldPartitionOverlayPanel"
-                    Width="230"
-                    Height="170"
-                    Padding="4"
-                    IsVisible="{Binding IsWorldPartitionOverlayVisible}"
-                    Background="#d91f2937"
-                    BorderBrush="#64748b"
-                    BorderThickness="1"
-                    CornerRadius="4">
-                <views:WorldPartitionOverlayControl Cursor="Hand"/>
-            </Border>
+            <StackPanel x:Name="ExtensionOverlayHost"
+                        Spacing="6"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Top"/>
+            <StackPanel x:Name="WorldPartitionOverlayHost"
+                        Spacing="4"
+                        VerticalAlignment="Top">
+                <ToggleButton x:Name="WorldPartitionOverlayToggle"
+                              Classes="world-partition-toggle"
+                              IsChecked="{Binding IsWorldPartitionOverlayVisible, Mode=TwoWay}"
+                              ToolTip.Tip="Toggle world partition overlay">
+                    <PathIcon Data="{StaticResource SceneIcon}" Width="16" Height="16"/>
+                </ToggleButton>
+                <Border x:Name="WorldPartitionOverlayPanel"
+                        Width="230"
+                        Height="170"
+                        Padding="4"
+                        IsVisible="{Binding IsWorldPartitionOverlayVisible}"
+                        Background="#d91f2937"
+                        BorderBrush="#64748b"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                    <views:WorldPartitionOverlayControl Cursor="Hand"/>
+                </Border>
+            </StackPanel>
         </StackPanel>
     </Grid>
 </UserControl>

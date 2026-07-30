@@ -4,24 +4,34 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using ArisenEditor.Core.Factory;
 using ArisenEditor.Core.Services;
 using ArisenEditor.Views;
 using ArisenEditor.ViewModels;
+using ArisenEditorFramework.Core;
+using ArisenEditorFramework.Extensions;
+using ArisenEngine.Rendering;
 using ArisenEngine.Resources.Serialization;
+using ArisenKernel.Contracts;
 using ArisenKernel.Diagnostics;
 using ArisenKernel.Lifecycle;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Primitives;
+using Avalonia.Layout;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 
 namespace ArisenEditor.Core.Validation;
 
 internal readonly record struct EditorViewportSmokeOptions(
     string Profile,
     string OutputPath,
-    int TimeoutSeconds)
+    int TimeoutSeconds,
+    bool RestartRenderDoc)
 {
-    private const int DefaultTimeoutSeconds = 30;
+    private const int DefaultTimeoutSeconds = 90;
     private const int MinimumTimeoutSeconds = 5;
     private const int MaximumTimeoutSeconds = 120;
 
@@ -42,6 +52,7 @@ internal readonly record struct EditorViewportSmokeOptions(
 
         var profile = "Editor";
         var timeoutSeconds = DefaultTimeoutSeconds;
+        var restartRenderDoc = false;
         for (var index = 0; index < args.Length; index++)
         {
             if (string.Equals(args[index], "--profile", StringComparison.OrdinalIgnoreCase) &&
@@ -65,6 +76,13 @@ internal readonly record struct EditorViewportSmokeOptions(
                         $"{MaximumTimeoutSeconds} seconds.");
                 }
             }
+            else if (string.Equals(
+                         args[index],
+                         "--editor-viewport-smoke-restart-renderdoc",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                restartRenderDoc = true;
+            }
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(profile);
@@ -79,56 +97,110 @@ internal readonly record struct EditorViewportSmokeOptions(
             ".arisen",
             "Logs",
             $"editor-viewport-summary-{safeProfile}-latest.json"));
-        return new EditorViewportSmokeOptions(profile, outputPath, timeoutSeconds);
+        return new EditorViewportSmokeOptions(
+            profile,
+            outputPath,
+            timeoutSeconds,
+            restartRenderDoc);
     }
 }
 
 internal sealed class EditorViewportSmokeSession : IDisposable
 {
+    private const string TerrainBrushPanelId = "TerrainBrush";
+    private static readonly (int Width, int Height)[] s_SceneResizeDeltas =
+    {
+        (64, 36),
+        (96, 54),
+        (-80, -45),
+        (80, 45)
+    };
+
     private readonly IClassicDesktopStyleApplicationLifetime m_Desktop;
     private readonly EditorViewportSmokeOptions m_Options;
-    private readonly EditorViewportSmokeState m_State = new();
+    private readonly EditorViewportSmokeState m_State;
     private readonly CancellationTokenSource m_TimeoutCancellation = new();
     private readonly SceneView m_SceneView;
-    private readonly TabControl m_Tabs;
+    private EditorViewportView m_GameView;
+    private readonly Grid m_ViewportLayout;
+    private readonly ContentControl m_TerrainBrushHost;
+    private readonly Control? m_TerrainBrushView;
     private readonly Window m_Window;
     private IEditorWorldDocumentService? m_WorldDocuments;
     private WorldPartitionViewModel? m_WorldPartitionViewModel;
     private WorldCellId m_WorldCellId;
     private bool m_WorldValidationStarted;
+    private bool m_WorldCellActive;
     private bool m_WorldUnloadRequested;
+    private bool m_ConcurrentViewportsRequested;
+    private bool m_ConcurrentViewportsShown;
+    private bool m_ConcurrentPresentationFinished;
+    private bool m_TerrainPaintActivated;
+    private bool m_GameViewportReplacementRequested;
+    private bool m_GameViewportReplacementPresented;
+    private long m_MinimumReplacementGameOwnershipGeneration;
+    private int m_NextSceneResizeStep;
+    private int m_GraphicsRestartActive;
+    private int m_RenderDocRestartStarted;
     private int m_Finished;
     private bool m_Disposed;
 
     public EditorViewportSmokeSession(
         IClassicDesktopStyleApplicationLifetime desktop,
-        EditorViewportSmokeOptions options)
+        EditorViewportSmokeOptions options,
+        ArisenPanelFactory panelFactory,
+        IReadOnlyList<EditorPanelRegistration> extensionPanels)
     {
         m_Desktop = desktop ?? throw new ArgumentNullException(nameof(desktop));
         m_Options = options;
+        var renderDocOptIn = Environment.GetEnvironmentVariable("ARISEN_ENABLE_RENDERDOC");
+        m_State = new EditorViewportSmokeState(
+            string.Equals(renderDocOptIn, "1", StringComparison.Ordinal) ||
+            string.Equals(renderDocOptIn, "true", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(renderDocOptIn, "yes", StringComparison.OrdinalIgnoreCase),
+            options.RestartRenderDoc);
+        ArgumentNullException.ThrowIfNull(panelFactory);
+        ArgumentNullException.ThrowIfNull(extensionPanels);
 
-        m_SceneView = new SceneView
+        IEditorPanel scenePanel = panelFactory.CreatePanel("Scene");
+        m_SceneView = scenePanel.Content as SceneView ??
+            throw new InvalidOperationException(
+                "The Editor Scene panel did not create a SceneView control.");
+        m_GameView = new EditorViewportView
         {
-            DataContext = new SceneViewModel()
+            DataContext = new EditorViewportViewModel(isSceneView: false),
+            IsVisible = false
         };
-        var sceneTab = new TabItem
+
+        EditorPanelRegistration? terrainBrushRegistration = extensionPanels.FirstOrDefault(
+            panel => string.Equals(panel.Id, TerrainBrushPanelId, StringComparison.Ordinal));
+        if (terrainBrushRegistration != null)
         {
-            Header = "Scene",
-            Content = m_SceneView
-        };
-        var gameTab = new TabItem
+            IEditorPanel terrainBrushPanel = panelFactory.CreatePanel(terrainBrushRegistration.Id);
+            m_TerrainBrushView = terrainBrushPanel.Content as Control ??
+                throw new InvalidOperationException(
+                    "The Terrain Brush panel did not create an Avalonia control.");
+        }
+        m_State.NotifyTerrainPaintAvailability(m_TerrainBrushView != null);
+
+        m_TerrainBrushHost = new ContentControl
         {
-            Header = "Game",
-            Content = new EditorViewportView
-            {
-                DataContext = new EditorViewportViewModel(isSceneView: false)
-            }
+            Content = m_TerrainBrushView,
+            IsVisible = false,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch
         };
-        m_Tabs = new TabControl
+        m_ViewportLayout = new Grid
         {
-            ItemsSource = new[] { sceneTab, gameTab },
-            SelectedIndex = 0
+            ColumnDefinitions = new ColumnDefinitions("*,0,0")
         };
+        Grid.SetColumn(m_SceneView, 0);
+        Grid.SetColumn(m_GameView, 1);
+        Grid.SetColumn(m_TerrainBrushHost, 2);
+        m_ViewportLayout.Children.Add(m_SceneView);
+        m_ViewportLayout.Children.Add(m_GameView);
+        m_ViewportLayout.Children.Add(m_TerrainBrushHost);
+
         m_Window = new Window
         {
             Title = "Arisen Editor",
@@ -137,7 +209,7 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             MinWidth = 640,
             MinHeight = 360,
             WindowStartupLocation = WindowStartupLocation.CenterScreen,
-            Content = m_Tabs
+            Content = m_ViewportLayout
         };
     }
 
@@ -152,11 +224,20 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         m_Desktop.MainWindow = m_Window;
         m_Window.Show();
         startEngine();
+
+        m_State.ObserveRenderDocAvailability(RenderDocService.Instance.IsAvailable);
+        if (m_State.IsComplete)
+        {
+            Complete(m_State.FailureMessage);
+            return;
+        }
+
         _ = WatchTimeoutAsync(m_TimeoutCancellation.Token);
 
         KernelLog.InfoFormat(
-            "[EditorViewportSmoke] Started. Timeout={0}s, Output={1}",
+            "[EditorViewportSmoke] Started. Timeout={0}s, RestartRenderDoc={1}, Output={2}",
             m_Options.TimeoutSeconds,
+            m_Options.RestartRenderDoc,
             m_Options.OutputPath);
     }
 
@@ -194,45 +275,69 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         {
             return;
         }
+        if (Volatile.Read(ref m_GraphicsRestartActive) != 0)
+        {
+            return;
+        }
 
         try
         {
+            if (m_GameViewportReplacementRequested &&
+                observation.ViewportKind == EditorViewportKind.GameView &&
+                !m_GameViewportReplacementPresented)
+            {
+                if (observation.SurfaceOwnershipGeneration <
+                    m_MinimumReplacementGameOwnershipGeneration)
+                {
+                    return;
+                }
+
+                m_GameViewportReplacementPresented = true;
+                KernelLog.InfoFormat(
+                    "[EditorViewportSmoke] Replacement GameView presented with ownership generation {0} ({1}).",
+                    observation.SurfaceOwnershipGeneration,
+                    observation.SurfaceOwnershipOwnerId);
+            }
+
             var action = m_State.Observe(observation);
             switch (action)
             {
                 case EditorViewportSmokeAction.ResizeSceneView:
                     BeginWorldPartitionValidation();
-                    if (m_State.IsComplete && !m_State.Succeeded)
-                    {
-                        Complete(m_State.FailureMessage);
-                        return;
-                    }
-                    Dispatcher.UIThread.Post(
-                        () =>
-                        {
-                            m_Window.Width += 160;
-                            m_Window.Height += 90;
-                        },
-                        DispatcherPriority.Loaded);
+                    RequestNextSceneResize(observation);
                     break;
 
                 case EditorViewportSmokeAction.ShowGameView:
-                    Dispatcher.UIThread.Post(
-                        () =>
-                        {
-                            m_State.NotifyGameViewActivated();
-                            if (m_State.IsComplete && !m_State.Succeeded)
-                            {
-                                Complete(m_State.FailureMessage);
-                                return;
-                            }
+                    m_ConcurrentViewportsRequested = true;
+                    TryShowConcurrentViewports();
+                    break;
 
-                            m_Tabs.SelectedIndex = 1;
-                        },
-                        DispatcherPriority.Loaded);
+                case EditorViewportSmokeAction.RestartRenderDoc:
+                    if (Interlocked.CompareExchange(
+                            ref m_RenderDocRestartStarted,
+                            1,
+                            0) != 0)
+                    {
+                        Complete("Editor viewport smoke requested RenderDoc restart more than once.");
+                        break;
+                    }
+                    Interlocked.Exchange(ref m_GraphicsRestartActive, 1);
+                    _ = RestartWithRenderDocAsync();
+                    break;
+
+                case EditorViewportSmokeAction.FinishConcurrentPresentation:
+                    m_ConcurrentPresentationFinished = true;
+                    TryRequestWorldCellUnload();
                     break;
 
                 case EditorViewportSmokeAction.Complete:
+                    if (m_GameViewportReplacementRequested &&
+                        !m_GameViewportReplacementPresented)
+                    {
+                        Complete(
+                            "The replacement GameView never acquired logical surface ownership and presented.");
+                        break;
+                    }
                     if (!m_SceneView.HasWorldPartitionOverlayVisual)
                     {
                         Complete(
@@ -251,6 +356,163 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         {
             Complete($"Editor viewport observation failed: {ex.Message}");
         }
+    }
+
+    private async Task RestartWithRenderDocAsync()
+    {
+        try
+        {
+            var services = EngineKernel.Instance.Services;
+            var backend = services.GetService<IRHIBackend>();
+            var lifecycle = services.GetService<IGraphicsDeviceLifecycleService>();
+            ulong previousGeneration = backend.Generation;
+            m_State.NotifyRenderDocRestartRequested(previousGeneration);
+            if (m_State.IsComplete && !m_State.Succeeded)
+            {
+                Complete(m_State.FailureMessage);
+                return;
+            }
+
+            KernelLog.InfoFormat(
+                "[EditorViewportSmoke] Requesting in-process RenderDoc graphics restart from generation {0}.",
+                previousGeneration);
+            GraphicsDeviceRestartResult result = await lifecycle.RestartAsync(
+                new RHIBackendRestartOptions(RHIBackendDiagnosticMode.RenderDoc),
+                m_TimeoutCancellation.Token);
+            bool renderDocAvailable = RenderDocService.Instance.IsAvailable;
+            m_State.ObserveRenderDocRestartCompleted(
+                result.Succeeded,
+                result.PreviousGeneration,
+                result.CurrentGeneration,
+                renderDocAvailable,
+                result.Diagnostic);
+            if (m_State.IsComplete && !m_State.Succeeded)
+            {
+                Complete(m_State.FailureMessage);
+                return;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(
+                ReplaceGameViewportForOwnershipValidation,
+                DispatcherPriority.Send);
+
+            KernelLog.InfoFormat(
+                "[EditorViewportSmoke] RenderDoc graphics restart completed. PreviousGeneration={0}, CurrentGeneration={1}, RenderDocAvailable={2}. Resuming dual-viewport presentation.",
+                result.PreviousGeneration,
+                result.CurrentGeneration,
+                renderDocAvailable);
+        }
+        catch (OperationCanceledException) when (m_TimeoutCancellation.IsCancellationRequested)
+        {
+            Complete("Editor viewport RenderDoc restart was cancelled by the smoke timeout.");
+        }
+        catch (Exception exception)
+        {
+            Complete($"Editor viewport RenderDoc restart failed: {exception.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref m_GraphicsRestartActive, 0);
+        }
+    }
+
+    private void ReplaceGameViewportForOwnershipValidation()
+    {
+        if (m_GameViewportReplacementRequested || Volatile.Read(ref m_Finished) != 0)
+        {
+            return;
+        }
+
+        EditorViewportSurfaceOwnershipSnapshot currentOwnership =
+            EditorViewportSurfaceOwnership.Shared.GetSnapshot(
+                EditorViewportKind.GameView);
+        if (!currentOwnership.IsOwned)
+        {
+            Complete(
+                "The active GameView had no logical surface ownership before replacement.");
+            return;
+        }
+
+        m_GameViewportReplacementRequested = true;
+        m_MinimumReplacementGameOwnershipGeneration = checked(
+            currentOwnership.Generation + 1);
+
+        EditorViewportView previous = m_GameView;
+        var replacement = new EditorViewportView
+        {
+            DataContext = new EditorViewportViewModel(isSceneView: false),
+            IsVisible = true
+        };
+        Grid.SetColumn(replacement, 1);
+        m_ViewportLayout.Children.Add(replacement);
+        m_ViewportLayout.UpdateLayout();
+        m_ViewportLayout.Children.Remove(previous);
+        if (previous.DataContext is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+        m_GameView = replacement;
+        m_ViewportLayout.UpdateLayout();
+
+        KernelLog.InfoFormat(
+            "[EditorViewportSmoke] Replaced live GameView after RenderDoc restart. PriorOwner={0}, PriorGeneration={1}, RequiredGeneration={2}.",
+            currentOwnership.OwnerId,
+            currentOwnership.Generation,
+            m_MinimumReplacementGameOwnershipGeneration);
+    }
+
+    private void RequestNextSceneResize(in EditorViewportPresentationObservation observation)
+    {
+        if (s_SceneResizeDeltas.Length != EditorViewportSmokeState.RequiredSceneResizeTransitions)
+        {
+            Complete(
+                $"Editor viewport smoke defines {s_SceneResizeDeltas.Length} resize steps, " +
+                $"expected {EditorViewportSmokeState.RequiredSceneResizeTransitions}.");
+            return;
+        }
+
+        if ((uint)m_NextSceneResizeStep >= (uint)s_SceneResizeDeltas.Length)
+        {
+            Complete("Editor viewport smoke exhausted its resize steps before the state contract completed.");
+            return;
+        }
+
+        var delta = s_SceneResizeDeltas[m_NextSceneResizeStep];
+        float targetVisualWidth = observation.VisualWidth + delta.Width;
+        float targetVisualHeight = observation.VisualHeight + delta.Height;
+        double targetWindowWidth = m_Window.Width + delta.Width;
+        double targetWindowHeight = m_Window.Height + delta.Height;
+        double renderScaling = TopLevel.GetTopLevel(m_SceneView)?.RenderScaling ?? 1.0;
+        m_State.NotifySceneResizeRequested(
+            checked((uint)Math.Max(1, (int)(targetVisualWidth * renderScaling))),
+            checked((uint)Math.Max(1, (int)(targetVisualHeight * renderScaling))),
+            targetVisualWidth,
+            targetVisualHeight);
+        if (m_State.IsComplete && !m_State.Succeeded)
+        {
+            Complete(m_State.FailureMessage);
+            return;
+        }
+
+        int step = ++m_NextSceneResizeStep;
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (Volatile.Read(ref m_Finished) != 0)
+                {
+                    return;
+                }
+
+                m_Window.Width = targetWindowWidth;
+                m_Window.Height = targetWindowHeight;
+                KernelLog.InfoFormat(
+                    "[EditorViewportSmoke] Requested observable SceneView resize {0}/{1}: {2}x{3}.",
+                    step,
+                    s_SceneResizeDeltas.Length,
+                    targetVisualWidth,
+                    targetVisualHeight);
+            },
+            DispatcherPriority.Loaded);
     }
 
     private async Task WatchTimeoutAsync(CancellationToken cancellationToken)
@@ -285,9 +547,14 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             return;
         }
 
-        EditorWorldCellDocumentState cell = world.Cells
-            .OrderBy(candidate => candidate.CellId)
-            .First();
+        EditorWorldCellDocumentState? originCell = world.Cells.FirstOrDefault(
+            candidate => candidate.Descriptor.Key.Coordinate == new WorldCellCoordinate(0, 0, 0));
+        if (originCell == null)
+        {
+            m_State.Fail("The canonical Editor world did not expose cell (0,0,0).");
+            return;
+        }
+        EditorWorldCellDocumentState cell = originCell;
         m_WorldDocuments = documents;
         m_WorldCellId = cell.CellId;
         m_WorldPartitionViewModel = new WorldPartitionViewModel();
@@ -304,7 +571,13 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             m_State.Fail($"The World Partition panel did not publish selection for cell '{cell.CellId}'.");
             return;
         }
-        m_State.ObserveWorldFirstOpen(world.World.Guid, world.Cells.Count, cell.CellId.Value);
+        m_State.ObserveWorldFirstOpen(
+            world.World.Guid,
+            world.Cells.Count,
+            cell.CellId.Value,
+            cell.Descriptor.Key.Coordinate.X,
+            cell.Descriptor.Key.Coordinate.Y,
+            cell.Descriptor.Key.Coordinate.Z);
         if (m_State.IsComplete && !m_State.Succeeded)
         {
             return;
@@ -357,17 +630,14 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             return;
         }
 
-        if (!m_WorldUnloadRequested &&
+        if (!m_WorldCellActive &&
             cell.IsEditPinned &&
             cell.Streaming.State == WorldCellStreamingState.Active)
         {
             m_State.ObserveWorldCellActive(m_WorldCellId.Value);
-            m_State.NotifyWorldCellUnloadRequested(m_WorldCellId.Value);
-            m_WorldUnloadRequested = true;
-            if (m_WorldDocuments?.UnloadCellForEditing(m_WorldCellId) != true)
-            {
-                Complete($"The real Editor host rejected the explicit unload request for cell '{m_WorldCellId}'.");
-            }
+            m_WorldCellActive = true;
+            TryShowConcurrentViewports();
+            TryRequestWorldCellUnload();
             return;
         }
 
@@ -381,6 +651,115 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             {
                 Complete(null);
             }
+        }
+    }
+
+    private void TryShowConcurrentViewports()
+    {
+        if (!m_ConcurrentViewportsRequested || !m_WorldCellActive ||
+            m_ConcurrentViewportsShown || Volatile.Read(ref m_Finished) != 0)
+        {
+            return;
+        }
+
+        m_ConcurrentViewportsShown = true;
+        m_State.NotifyGameViewActivated();
+        if (m_State.IsComplete && !m_State.Succeeded)
+        {
+            Complete(m_State.FailureMessage);
+            return;
+        }
+
+        m_GameView.IsVisible = true;
+        m_TerrainBrushHost.IsVisible = m_TerrainBrushView != null;
+        m_ViewportLayout.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+        m_ViewportLayout.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
+        m_ViewportLayout.ColumnDefinitions[2].Width = m_TerrainBrushView != null
+            ? new GridLength(280)
+            : new GridLength(0);
+        m_Window.MinWidth = m_TerrainBrushView != null ? 960 : 640;
+        m_Window.Width = Math.Max(m_Window.Width, m_TerrainBrushView != null ? 1200 : 960);
+        m_ViewportLayout.UpdateLayout();
+
+        double renderScaling = TopLevel.GetTopLevel(m_ViewportLayout)?.RenderScaling ?? 1.0;
+        m_State.NotifyConcurrentViewportLayout(
+            checked((uint)Math.Max(1, (int)(m_SceneView.Bounds.Width * renderScaling))),
+            checked((uint)Math.Max(1, (int)(m_SceneView.Bounds.Height * renderScaling))),
+            (float)m_SceneView.Bounds.Width,
+            (float)m_SceneView.Bounds.Height,
+            checked((uint)Math.Max(1, (int)(m_GameView.Bounds.Width * renderScaling))),
+            checked((uint)Math.Max(1, (int)(m_GameView.Bounds.Height * renderScaling))),
+            (float)m_GameView.Bounds.Width,
+            (float)m_GameView.Bounds.Height);
+        if (m_State.IsComplete && !m_State.Succeeded)
+        {
+            Complete(m_State.FailureMessage);
+            return;
+        }
+
+        if (!m_SceneView.HasWorldPartitionOverlayVisual)
+        {
+            Complete(
+                "SceneView removed its world-partition overlay controls while showing concurrent viewports.");
+            return;
+        }
+
+        if (m_TerrainBrushView != null)
+        {
+            ActivateTerrainPaint();
+        }
+
+        KernelLog.InfoFormat(
+            "[EditorViewportSmoke] Concurrent SceneView/GameView presentation started with active cell '{0}'. TerrainPaint={1}.",
+            m_WorldCellId,
+            m_TerrainPaintActivated);
+    }
+
+    private void ActivateTerrainPaint()
+    {
+        ToggleButton[] toggles = m_TerrainBrushView!
+            .GetVisualDescendants()
+            .OfType<ToggleButton>()
+            .ToArray();
+        ToggleButton? brush = toggles.SingleOrDefault(
+            toggle => string.Equals(toggle.Content as string, "Brush", StringComparison.Ordinal));
+        ToggleButton? paint = toggles.SingleOrDefault(
+            toggle => string.Equals(toggle.Content as string, "Paint", StringComparison.Ordinal));
+        if (brush == null || paint == null)
+        {
+            Complete(
+                "The real Terrain Brush panel did not expose its Brush and Paint toggle controls.");
+            return;
+        }
+
+        brush.IsChecked = false;
+        paint.IsChecked = true;
+        if (brush.IsChecked == true || paint.IsChecked != true)
+        {
+            Complete("The real Terrain Brush panel rejected Paint-only activation.");
+            return;
+        }
+
+        m_TerrainPaintActivated = true;
+        m_State.NotifyTerrainPaintActivated();
+        TryRequestWorldCellUnload();
+    }
+
+    private void TryRequestWorldCellUnload()
+    {
+        if (!m_ConcurrentPresentationFinished || !m_WorldCellActive ||
+            m_WorldUnloadRequested || Volatile.Read(ref m_Finished) != 0 ||
+            (m_TerrainBrushView != null && !m_TerrainPaintActivated))
+        {
+            return;
+        }
+
+        m_State.NotifyWorldCellUnloadRequested(m_WorldCellId.Value);
+        m_WorldUnloadRequested = true;
+        if (m_WorldDocuments?.UnloadCellForEditing(m_WorldCellId) != true)
+        {
+            Complete(
+                $"The real Editor host rejected the explicit unload request for cell '{m_WorldCellId}'.");
         }
     }
 

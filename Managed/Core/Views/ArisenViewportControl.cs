@@ -21,34 +21,63 @@ namespace ArisenEditor.Views;
 /// A high-performance viewport control that displays the Arisen Engine's output.
 /// Refactored to follow the official Avalonia GPU Interop pattern for maximum stability and performance.
 /// </summary>
-public partial class ArisenViewportControl : Control
+public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecycleParticipant
 {
+    private sealed class CompositorResourceReleaseException : Exception
+    {
+        public CompositorResourceReleaseException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
+
     private CompositionSurfaceVisual? _visual;
     private CompositionDrawingSurface? _surface;
     private Compositor? _compositor;
     private ICompositionGpuInterop? _interop;
     private RenderSubsystem? _renderSubsystem;
+    private IGraphicsDeviceLifecycleService? _graphicsDeviceLifecycle;
+    private EditorViewportSurfaceLease? _surfaceOwnershipLease;
+    private CancellationTokenSource _initializationCancellation = new();
     
+    private bool _isAttached;
+    private bool _isParticipantRegistered;
+    private bool _surfaceRegistered;
+    private bool _graphicsRestartPrepared;
     private bool _isInitialized;
+    private bool _isInitializing;
     private bool _isUpdating;
+    private bool _isResizing;
+    private bool _presentationFailed;
+    private bool _resourceReleaseFailed;
+    private bool _releaseSurfaceOwnershipOnShutdown;
     private bool _updateQueued;
     private string? _handleType;
     private string? _semaphoreType;
     private CompositionGpuImportedImageSynchronizationCapabilities _syncCapabilities;
     private bool _syncCapabilitiesLogged;
     private bool _firstImportLogged;
-    private DateTime _lastRecoveryTime = DateTime.MinValue;
     private DateTime _lastPresentationSkipLogTime = DateTime.MinValue;
     private RenderOutputPresentationSkipReason _lastPresentationSkipReason;
     private RenderOutputPresentationState _presentationState;
     private int _lastRequestedSurfaceWidth;
     private int _lastRequestedSurfaceHeight;
+    private int _pendingSurfaceWidth;
+    private int _pendingSurfaceHeight;
+    private int _resizeRequestVersion;
+    private int _lifecycleVersion;
     private int _outputReadyDispatchQueued;
+    private ulong _preparedGraphicsGeneration;
     private EditorViewportKind _viewportKind = EditorViewportKind.SceneView;
+    private Task _initializeTask = Task.CompletedTask;
+    private Task _activePresentationTask = Task.CompletedTask;
+    private Task _shutdownTask = Task.CompletedTask;
+    private Task? _resizeTask;
     
     private readonly Action _updateAction;
     private readonly Action _outputReadyDispatchAction;
     private readonly Dictionary<IntPtr, ICompositionImportedGpuImage> _imageCache = new();
+    private readonly Dictionary<IntPtr, ICompositionImportedGpuSemaphore> _semaphoreCache = new();
 
     public ArisenViewportControl()
     {
@@ -56,30 +85,90 @@ public partial class ArisenViewportControl : Control
         _outputReadyDispatchAction = DispatchOutputReady;
     }
 
+    public string ParticipantId => $"EditorViewport:{Handle.Handle.ToInt64():X}";
+
+    public int Order => 100;
+
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
-        Initialize();
+        _isAttached = true;
+        RenewInitializationCancellation();
+        RegisterGraphicsDeviceLifecycleParticipant();
+        BeginInitialize();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        Shutdown();
+        _isAttached = false;
+        CancelInitialization();
+        Shutdown(releaseSurfaceOwnership: true);
         base.OnDetachedFromVisualTree(e);
     }
 
-    private async void Initialize()
+    private void BeginInitialize()
     {
-        if (_isInitialized) return;
+        if (_isInitialized || _isInitializing || !_initializeTask.IsCompleted)
+        {
+            return;
+        }
+
+        RenewInitializationCancellation();
+        _initializeTask = InitializeAsync(
+            allowDuringGraphicsRestore: false,
+            _initializationCancellation.Token);
+        ObserveLifecycleTask(_initializeTask, "initialization");
+    }
+
+    private async Task InitializeAsync(
+        bool allowDuringGraphicsRestore,
+        CancellationToken cancellationToken)
+    {
+        if (_isInitialized || _isInitializing) return;
+
+        if (!_isAttached || cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var lifecycleState = _graphicsDeviceLifecycle?.Snapshot.State ??
+            GraphicsDeviceLifecycleState.Running;
+        if (!allowDuringGraphicsRestore &&
+            lifecycleState != GraphicsDeviceLifecycleState.Running)
+        {
+            return;
+        }
+
+        _isInitializing = true;
+        int lifecycleVersion = 0;
 
         try
         {
+            await _shutdownTask;
+            if (!_isAttached || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            if (_resourceReleaseFailed)
+            {
+                KernelLog.Error(
+                    "[ArisenViewportControl] Initialization is blocked because the prior GPU import release failed.");
+                throw new InvalidOperationException(
+                    "The prior viewport GPU import release failed.");
+            }
+            lifecycleVersion = ++_lifecycleVersion;
+            _presentationFailed = false;
+
             // 1. Get Compositor and Interop
             var selfVisual = ElementComposition.GetElementVisual(this);
             if (selfVisual == null) return;
             
             _compositor = selfVisual.Compositor;
             _interop = await _compositor.TryGetCompositionGpuInterop();
+            if (lifecycleVersion != _lifecycleVersion || VisualRoot == null)
+            {
+                return;
+            }
             
             if (_interop == null)
             {
@@ -143,7 +232,57 @@ public partial class ArisenViewportControl : Control
                     "using explicit exported Vulkan semaphores for viewport updates.");
             }
 
-            // 2. Setup Composition Visuals
+            _viewportKind = DataContext is EditorViewportViewModel { IsSceneView: false }
+                ? EditorViewportKind.GameView
+                : EditorViewportKind.SceneView;
+            _renderSubsystem = EngineKernel.Instance.Services.GetService<RenderSubsystem>();
+            if (_renderSubsystem != null && _surfaceOwnershipLease == null)
+            {
+                var ownership = EditorViewportSurfaceOwnership.Shared;
+                EditorViewportSurfaceOwnershipSnapshot ownershipSnapshot =
+                    ownership.GetSnapshot(_viewportKind);
+                if (ownershipSnapshot.IsOwned)
+                {
+                    KernelLog.Info(
+                        $"[ArisenViewportControl] Waiting for {_viewportKind} ownership held by " +
+                        $"'{ownershipSnapshot.OwnerId}' generation {ownershipSnapshot.Generation}.");
+                }
+
+                EditorViewportSurfaceLease lease = await ownership.AcquireAsync(
+                    _viewportKind,
+                    ParticipantId,
+                    cancellationToken);
+                if (!_isAttached ||
+                    cancellationToken.IsCancellationRequested ||
+                    lifecycleVersion != _lifecycleVersion)
+                {
+                    lease.Dispose();
+                    return;
+                }
+
+                lifecycleState = _graphicsDeviceLifecycle?.Snapshot.State ??
+                    GraphicsDeviceLifecycleState.Running;
+                if (!allowDuringGraphicsRestore &&
+                    lifecycleState != GraphicsDeviceLifecycleState.Running)
+                {
+                    lease.Dispose();
+                    return;
+                }
+
+                _surfaceOwnershipLease = lease;
+                KernelLog.Info(
+                    $"[ArisenViewportControl] Acquired {_viewportKind} ownership generation " +
+                    $"{lease.Generation} for '{ParticipantId}'.");
+            }
+
+            if (_surfaceOwnershipLease != null &&
+                _surfaceOwnershipLease.ViewportKind != _viewportKind)
+            {
+                throw new InvalidOperationException(
+                    $"Viewport '{ParticipantId}' owns {_surfaceOwnershipLease.ViewportKind} but resolved as {_viewportKind}.");
+            }
+
+            // 2. Setup Composition Visuals after prior logical viewport teardown completes.
             _surface = _compositor.CreateDrawingSurface();
             _visual = _compositor.CreateSurfaceVisual();
             UpdatePresentationVisualGeometry();
@@ -152,22 +291,34 @@ public partial class ArisenViewportControl : Control
             ElementComposition.SetElementChildVisual(this, _visual);
 
             // 3. Connect to Arisen RenderSubsystem
-            _renderSubsystem = EngineKernel.Instance.Services.GetService<RenderSubsystem>();
             if (_renderSubsystem != null)
             {
-                _viewportKind = DataContext is EditorViewportViewModel { IsSceneView: false }
-                    ? EditorViewportKind.GameView
-                    : EditorViewportKind.SceneView;
                 var pixelSize = GetPhysicalPixelSize();
                 var surfaceType = _viewportKind == EditorViewportKind.SceneView
                     ? SurfaceType.SceneView
                     : SurfaceType.GameView;
-                _renderSubsystem.RegisterSurface(
+                bool registered = await _renderSubsystem.RegisterSurfaceAsync(
                     this.Handle.Handle,
                     _viewportKind.ToString(),
                     surfaceType,
                     pixelSize.Width,
                     pixelSize.Height);
+                if (!registered)
+                {
+                    throw new InvalidOperationException(
+                        $"Render surface 0x{Handle.Handle.ToInt64():X} was not registered.");
+                }
+                _surfaceRegistered = true;
+                if (lifecycleVersion != _lifecycleVersion || !_isAttached)
+                {
+                    if (!await _renderSubsystem.UnregisterSurfaceAsync(Handle.Handle))
+                    {
+                        throw new InvalidOperationException(
+                            $"Render surface 0x{Handle.Handle.ToInt64():X} could not be removed after initialization was invalidated.");
+                    }
+                    _surfaceRegistered = false;
+                    return;
+                }
                 _lastRequestedSurfaceWidth = pixelSize.Width;
                 _lastRequestedSurfaceHeight = pixelSize.Height;
                 KernelLog.Info($"[ArisenViewportControl] Registered surface 0x{this.Handle.Handle:X} ({pixelSize.Width}x{pixelSize.Height})");
@@ -187,33 +338,161 @@ public partial class ArisenViewportControl : Control
             }, DispatcherPriority.Loaded);
             QueueNextFrame();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _isInitialized = false;
+            _isResizing = true;
+            try
+            {
+                await ReleaseViewportResourcesAsync(
+                    Handle.Handle,
+                    _renderSubsystem,
+                    releaseSurfaceOwnership: true);
+                ResetViewportState();
+            }
+            catch (Exception releaseException)
+            {
+                _resourceReleaseFailed = true;
+                throw new AggregateException(
+                    "Viewport initialization was cancelled and its partial GPU ownership could not be released.",
+                    releaseException);
+            }
+        }
         catch (Exception ex)
         {
             KernelLog.Error($"[ArisenViewportControl] Initialization failed: {ex.Message}");
+            _isInitialized = false;
+            _isResizing = true;
+            try
+            {
+                await ReleaseViewportResourcesAsync(
+                    Handle.Handle,
+                    _renderSubsystem,
+                    releaseSurfaceOwnership: true);
+                ResetViewportState();
+            }
+            catch (Exception releaseException)
+            {
+                _resourceReleaseFailed = true;
+                throw new AggregateException(
+                    "Viewport initialization failed and its partial GPU ownership could not be released.",
+                    ex,
+                    releaseException);
+            }
+            throw;
+        }
+        finally
+        {
+            _isInitializing = false;
         }
     }
 
-    private void Shutdown()
+    private void Shutdown(bool releaseSurfaceOwnership)
     {
+        if (releaseSurfaceOwnership)
+        {
+            _releaseSurfaceOwnershipOnShutdown = true;
+        }
+
+        if (!_shutdownTask.IsCompleted)
+        {
+            return;
+        }
+
+        _releaseSurfaceOwnershipOnShutdown = releaseSurfaceOwnership;
+        Task initializeTask = _initializeTask;
+        ++_lifecycleVersion;
         _isInitialized = false;
-        
-        if (_renderSubsystem != null)
+        _isResizing = true;
+        _shutdownTask = ShutdownAsync(
+            this.Handle.Handle,
+            _renderSubsystem,
+            initializeTask);
+        ObserveLifecycleTask(_shutdownTask, "shutdown");
+    }
+
+    private async Task ShutdownAsync(
+        IntPtr host,
+        RenderSubsystem? renderSubsystem,
+        Task initializeTask)
+    {
+        try
         {
-            _renderSubsystem.OutputFrameReady -= OnOutputFrameReady;
-            _renderSubsystem.UnregisterSurface(this.Handle.Handle);
+            await initializeTask;
+        }
+        catch
+        {
+            // Initialization reports its own diagnostic; teardown still owns partial resources.
         }
 
-        lock (_imageCache)
+        try
         {
-            foreach (var img in _imageCache.Values) DisposeImportedImage(img);
-            _imageCache.Clear();
+            await ReleaseViewportResourcesAsync(
+                host,
+                renderSubsystem ?? _renderSubsystem,
+                releaseSurfaceOwnership: false);
+        }
+        catch (Exception ex)
+        {
+            _resourceReleaseFailed = true;
+            KernelLog.Error(
+                $"[ArisenViewportControl] Failed to release compositor ownership during shutdown: {ex.Message}");
+            return;
         }
 
+        ResetViewportState();
+
+        if (!_isAttached)
+        {
+            UnregisterGraphicsDeviceLifecycleParticipant();
+        }
+    }
+
+    private async Task ReleaseViewportResourcesAsync(
+        IntPtr host,
+        RenderSubsystem? renderSubsystem,
+        bool releaseSurfaceOwnership)
+    {
+        if (renderSubsystem != null)
+        {
+            renderSubsystem.OutputFrameReady -= OnOutputFrameReady;
+        }
+
+        await _activePresentationTask;
+        var resizeTask = _resizeTask;
+        if (resizeTask != null)
+        {
+            await resizeTask;
+        }
+        await ClearImportedResourceCacheAsync();
+
+        if (_surfaceRegistered)
+        {
+            if (renderSubsystem == null ||
+                !await renderSubsystem.UnregisterSurfaceAsync(host))
+            {
+                throw new InvalidOperationException(
+                    $"Render surface 0x{host.ToInt64():X} was not removed at the render-thread boundary.");
+            }
+            _surfaceRegistered = false;
+        }
+
+        ElementComposition.SetElementChildVisual(this, null);
         _surface?.Dispose();
+
+        if (releaseSurfaceOwnership || _releaseSurfaceOwnershipOnShutdown)
+        {
+            ReleaseSurfaceOwnership();
+        }
+    }
+
+    private void ResetViewportState()
+    {
         _surface = null;
         _visual = null;
         _compositor = null;
         _interop = null;
+        _renderSubsystem = null;
         _handleType = null;
         _semaphoreType = null;
         _presentationState.Reset();
@@ -224,8 +503,243 @@ public partial class ArisenViewportControl : Control
         _lastPresentationSkipLogTime = DateTime.MinValue;
         _lastRequestedSurfaceWidth = 0;
         _lastRequestedSurfaceHeight = 0;
+        _pendingSurfaceWidth = 0;
+        _pendingSurfaceHeight = 0;
+        _resizeRequestVersion = 0;
         Interlocked.Exchange(ref _outputReadyDispatchQueued, 0);
         _updateQueued = false;
+        _isUpdating = false;
+        _isResizing = false;
+        _releaseSurfaceOwnershipOnShutdown = false;
+        _activePresentationTask = Task.CompletedTask;
+        _resizeTask = null;
+    }
+
+    public Task PrepareForGraphicsDeviceRestartAsync(
+        GraphicsDeviceRestartContext context,
+        CancellationToken cancellationToken)
+    {
+        return InvokeOnUIThreadAsync(
+            async () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _graphicsRestartPrepared = false;
+                _preparedGraphicsGeneration = context.PreviousGeneration;
+                CancelInitialization();
+                Shutdown(releaseSurfaceOwnership: false);
+                await _shutdownTask;
+
+                if (_resourceReleaseFailed ||
+                    _surfaceRegistered ||
+                    _imageCache.Count != 0 ||
+                    _semaphoreCache.Count != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Viewport '{ParticipantId}' did not release all generation {context.PreviousGeneration} resources.");
+                }
+
+                _graphicsRestartPrepared = true;
+            },
+            cancellationToken);
+    }
+
+    public Task RestoreAfterGraphicsDeviceRestartAsync(
+        GraphicsDeviceRestartContext context,
+        CancellationToken cancellationToken)
+    {
+        return InvokeOnUIThreadAsync(
+            async () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_graphicsRestartPrepared ||
+                    _preparedGraphicsGeneration != context.PreviousGeneration)
+                {
+                    throw new InvalidOperationException(
+                        $"Viewport '{ParticipantId}' was not prepared for generation {context.PreviousGeneration}.");
+                }
+                if (context.CurrentGeneration <= context.PreviousGeneration)
+                {
+                    throw new InvalidOperationException(
+                        "Viewport restoration requires an advanced graphics generation.");
+                }
+
+                if (!_isAttached)
+                {
+                    _graphicsRestartPrepared = false;
+                    _preparedGraphicsGeneration = 0;
+                    UnregisterGraphicsDeviceLifecycleParticipant();
+                    return;
+                }
+
+                if (_surfaceOwnershipLease == null)
+                {
+                    _graphicsRestartPrepared = false;
+                    _preparedGraphicsGeneration = 0;
+                    return;
+                }
+
+                RenewInitializationCancellation();
+                _initializeTask = InitializeAsync(
+                    allowDuringGraphicsRestore: true,
+                    _initializationCancellation.Token);
+                await _initializeTask;
+                if (!_isInitialized || !_surfaceRegistered)
+                {
+                    throw new InvalidOperationException(
+                        $"Viewport '{ParticipantId}' did not restore its render surface for generation {context.CurrentGeneration}.");
+                }
+
+                _graphicsRestartPrepared = false;
+                _preparedGraphicsGeneration = 0;
+            },
+            cancellationToken);
+    }
+
+    private void RegisterGraphicsDeviceLifecycleParticipant()
+    {
+        if (_isParticipantRegistered)
+        {
+            return;
+        }
+
+        if (!EngineKernel.Instance.Services.TryGetService<IGraphicsDeviceLifecycleService>(
+                out var lifecycle) ||
+            lifecycle == null)
+        {
+            KernelLog.Warning(
+                $"[ArisenViewportControl] Graphics lifecycle service is unavailable for '{ParticipantId}'.");
+            return;
+        }
+
+        lifecycle.RegisterParticipant(this);
+        lifecycle.StateChanged += OnGraphicsDeviceLifecycleStateChanged;
+        _graphicsDeviceLifecycle = lifecycle;
+        _isParticipantRegistered = true;
+    }
+
+    private void UnregisterGraphicsDeviceLifecycleParticipant()
+    {
+        if (!_isParticipantRegistered || _graphicsDeviceLifecycle == null)
+        {
+            return;
+        }
+
+        _graphicsDeviceLifecycle.StateChanged -= OnGraphicsDeviceLifecycleStateChanged;
+        _graphicsDeviceLifecycle.UnregisterParticipant(ParticipantId);
+        _graphicsDeviceLifecycle = null;
+        _isParticipantRegistered = false;
+    }
+
+    private void OnGraphicsDeviceLifecycleStateChanged(
+        GraphicsDeviceLifecycleSnapshot snapshot)
+    {
+        if (snapshot.State != GraphicsDeviceLifecycleState.Running)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (_isAttached &&
+                    !_graphicsRestartPrepared &&
+                    !_isInitialized &&
+                    !_resourceReleaseFailed)
+                {
+                    RenewInitializationCancellation();
+                    BeginInitialize();
+                }
+            },
+            DispatcherPriority.Loaded);
+    }
+
+    private static Task InvokeOnUIThreadAsync(
+        Func<Task> operation,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            return operation();
+        }
+
+        var completion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            Dispatcher.UIThread.Post(
+                async () =>
+                {
+                    try
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        await operation();
+                        completion.TrySetResult(true);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        completion.TrySetCanceled(cancellationToken);
+                    }
+                    catch (Exception exception)
+                    {
+                        completion.TrySetException(exception);
+                    }
+                },
+                DispatcherPriority.Send);
+        }
+        catch (Exception exception)
+        {
+            completion.TrySetException(exception);
+        }
+
+        return completion.Task;
+    }
+
+    private static async void ObserveLifecycleTask(Task task, string operation)
+    {
+        try
+        {
+            await task;
+        }
+        catch (Exception exception)
+        {
+            KernelLog.Error(
+                $"[ArisenViewportControl] Viewport {operation} entered a fail-stop state: {exception.Message}");
+        }
+    }
+
+    private void CancelInitialization()
+    {
+        if (!_initializationCancellation.IsCancellationRequested)
+        {
+            _initializationCancellation.Cancel();
+        }
+    }
+
+    private void RenewInitializationCancellation()
+    {
+        if (!_initializationCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _initializationCancellation.Dispose();
+        _initializationCancellation = new CancellationTokenSource();
+    }
+
+    private void ReleaseSurfaceOwnership()
+    {
+        EditorViewportSurfaceLease? lease = _surfaceOwnershipLease;
+        if (lease == null)
+        {
+            return;
+        }
+
+        lease.Dispose();
+        _surfaceOwnershipLease = null;
+        KernelLog.Info(
+            $"[ArisenViewportControl] Released {lease.ViewportKind} ownership generation " +
+            $"{lease.Generation} for '{lease.OwnerId}'.");
     }
 
     private void OnOutputFrameReady(IntPtr host)
@@ -256,7 +770,7 @@ public partial class ArisenViewportControl : Control
     private void OnCompositionUpdate()
     {
         _updateQueued = false;
-        if (!_isInitialized || _isUpdating) return;
+        if (!_isInitialized || _isUpdating || _isResizing || _presentationFailed) return;
 
         // Sync visual size
         if (_visual != null)
@@ -294,7 +808,7 @@ public partial class ArisenViewportControl : Control
             return;
         }
 
-        RenderFrameAsync(info);
+        _activePresentationTask = RenderFrameAsync(info);
     }
 
     private void LogPresentationSkipIfUseful(in RenderOutputInfo info, RenderOutputPresentationSkipReason reason)
@@ -321,7 +835,7 @@ public partial class ArisenViewportControl : Control
             $"wait=0x{info.WaitSemaphoreHandle.ToInt64():X}, signal=0x{info.SignalSemaphoreHandle.ToInt64():X}");
     }
 
-    private async void RenderFrameAsync(RenderOutputInfo info)
+    private async Task RenderFrameAsync(RenderOutputInfo info)
     {
         _isUpdating = true;
         
@@ -338,7 +852,7 @@ public partial class ArisenViewportControl : Control
             // Handle Resize
             if (_presentationState.ShouldResetImportedImageCache(info))
             {
-                ClearImageCache();
+                await ClearImportedResourceCacheAsync();
                 KernelLog.Info($"[ArisenViewportControl] Viewport output resized: generation={info.ResizeGeneration}, size={info.Width}x{info.Height}");
                 _presentationState.MarkImportedImageCacheCurrent(info);
             }
@@ -390,19 +904,18 @@ public partial class ArisenViewportControl : Control
                     return;
                 }
 
-                var waitSemaphore = interop.ImportSemaphore(new PlatformHandle(info.WaitSemaphoreHandle, semaphoreType));
-                var signalSemaphore = interop.ImportSemaphore(new PlatformHandle(info.SignalSemaphoreHandle, semaphoreType));
-                try
-                {
-                    await surface.UpdateWithSemaphoresAsync(importedImage, waitSemaphore, signalSemaphore);
-                }
-                finally
-                {
-                    DisposeImportedSemaphore(waitSemaphore);
-                    DisposeImportedSemaphore(signalSemaphore);
-                    ReleaseConsumedSemaphore(info.SignalSemaphoreHandle);
-                    info.SignalSemaphoreHandle = IntPtr.Zero;
-                }
+                var waitSemaphore = GetOrImportSemaphore(
+                    interop,
+                    info.WaitSemaphoreHandle,
+                    semaphoreType);
+                var signalSemaphore = GetOrImportSemaphore(
+                    interop,
+                    info.SignalSemaphoreHandle,
+                    semaphoreType);
+                await surface.UpdateWithSemaphoresAsync(importedImage, waitSemaphore, signalSemaphore);
+
+                CompleteConsumedSemaphore(info.SignalSemaphoreHandle);
+                info.SignalSemaphoreHandle = IntPtr.Zero;
             }
             else
             {
@@ -442,13 +955,21 @@ public partial class ArisenViewportControl : Control
                     (float)visual.CenterPoint.X,
                     (float)visual.CenterPoint.Y,
                     (float)visual.Size.X,
-                    (float)visual.Size.Y));
+                    (float)visual.Size.Y,
+                    _surfaceOwnershipLease?.Generation ?? 0,
+                    _surfaceOwnershipLease?.OwnerId ?? string.Empty,
+                    _imageCache.Count,
+                    _semaphoreCache.Count));
             }
         }
-        catch (PlatformGraphicsContextLostException)
+        catch (CompositorResourceReleaseException ex)
         {
-            KernelLog.Warning("[ArisenViewportControl] Graphics context lost. Triggering recovery...");
-            RecoverContext();
+            _resourceReleaseFailed = true;
+            EnterPresentationFailureState(ex);
+        }
+        catch (PlatformGraphicsContextLostException ex)
+        {
+            EnterPresentationFailureState(ex);
         }
         catch (Exception ex)
         {
@@ -472,68 +993,147 @@ public partial class ArisenViewportControl : Control
         }
     }
 
-    private static void DisposeImportedSemaphore(ICompositionImportedGpuSemaphore semaphore)
+    private void CompleteConsumedSemaphore(IntPtr handle)
     {
-        try
+        if (handle != IntPtr.Zero)
         {
-            if (semaphore is IAsyncDisposable asyncDisposable)
-            {
-                _ = asyncDisposable.DisposeAsync().AsTask();
-            }
-            else if (semaphore is IDisposable disposable)
-            {
-                disposable.Dispose();
-            }
+            _renderSubsystem?.CompleteConsumedSemaphoreHandle(this.Handle.Handle, handle);
         }
-        catch (Exception ex)
+    }
+
+    private static async Task DisposeImportedSemaphoreAsync(ICompositionImportedGpuSemaphore semaphore)
+    {
+        await semaphore.ImportCompleted;
+        if (semaphore is IAsyncDisposable asyncDisposable)
         {
-            KernelLog.Warning($"[ArisenViewportControl] Failed to dispose imported GPU semaphore: {ex.Message}");
+            await asyncDisposable.DisposeAsync();
         }
+        else if (semaphore is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+    }
+
+    private ICompositionImportedGpuSemaphore GetOrImportSemaphore(
+        ICompositionGpuInterop interop,
+        IntPtr handle,
+        string semaphoreType)
+    {
+        if (_semaphoreCache.TryGetValue(handle, out var semaphore))
+        {
+            return semaphore;
+        }
+
+        semaphore = interop.ImportSemaphore(new PlatformHandle(handle, semaphoreType));
+        _semaphoreCache.Add(handle, semaphore);
+        return semaphore;
     }
 
     private void QueueNextFrame()
     {
-        if (_isInitialized && !_updateQueued && _compositor != null)
+        if (_isInitialized && !_isResizing && !_presentationFailed &&
+            !_updateQueued && _compositor != null)
         {
             _updateQueued = true;
             _compositor.RequestCompositionUpdate(_updateAction);
         }
     }
 
-    private void RecoverContext()
+    private void EnterPresentationFailureState(Exception exception)
     {
-        if ((DateTime.UtcNow - _lastRecoveryTime).TotalMilliseconds < 1000) return;
-        _lastRecoveryTime = DateTime.UtcNow;
-
-        Shutdown();
-        Initialize();
-    }
-
-    private void ClearImageCache()
-    {
-        lock (_imageCache)
+        if (_presentationFailed)
         {
-            foreach (var img in _imageCache.Values) DisposeImportedImage(img);
-            _imageCache.Clear();
+            return;
+        }
+
+        _presentationFailed = true;
+        ++_lifecycleVersion;
+        _isInitialized = false;
+        _isResizing = true;
+        _updateQueued = false;
+        var renderSubsystem = _renderSubsystem;
+        var host = this.Handle.Handle;
+        if (renderSubsystem != null)
+        {
+            renderSubsystem.OutputFrameReady -= OnOutputFrameReady;
+        }
+
+        KernelLog.Error(
+            $"[ArisenViewportControl] GPU presentation failed; the viewport is entering a fail-stop state. " +
+            $"Resources will not be recreated in a timed loop. ErrorType={exception.GetType().Name}, " +
+            $"Error={exception.Message}");
+        if (_shutdownTask.IsCompleted)
+        {
+            _shutdownTask = ReleaseFailedPresentationAsync(host, renderSubsystem);
         }
     }
 
-    private static void DisposeImportedImage(ICompositionImportedGpuImage image)
+    private async Task ReleaseFailedPresentationAsync(IntPtr host, RenderSubsystem? renderSubsystem)
     {
+        // Defer until the presentation/resize callback that detected the failure has returned.
+        await Task.Yield();
+        await ShutdownAsync(host, renderSubsystem, _initializeTask);
+    }
+
+    private async Task ClearImportedResourceCacheAsync()
+    {
+        List<KeyValuePair<IntPtr, ICompositionImportedGpuImage>> images;
+        List<KeyValuePair<IntPtr, ICompositionImportedGpuSemaphore>> semaphores;
+        lock (_imageCache)
+        {
+            images = new List<KeyValuePair<IntPtr, ICompositionImportedGpuImage>>(_imageCache);
+        }
+        lock (_semaphoreCache)
+        {
+            semaphores = new List<KeyValuePair<IntPtr, ICompositionImportedGpuSemaphore>>(_semaphoreCache);
+        }
+
         try
         {
-            if (image is IAsyncDisposable asyncDisposable)
+            foreach (var (handle, image) in images)
             {
-                _ = asyncDisposable.DisposeAsync().AsTask();
+                await DisposeImportedImageAsync(image);
+                lock (_imageCache)
+                {
+                    if (_imageCache.TryGetValue(handle, out var cached) &&
+                        ReferenceEquals(cached, image))
+                    {
+                        _imageCache.Remove(handle);
+                    }
+                }
             }
-            else if (image is IDisposable disposable)
+
+            foreach (var (handle, semaphore) in semaphores)
             {
-                disposable.Dispose();
+                await DisposeImportedSemaphoreAsync(semaphore);
+                lock (_semaphoreCache)
+                {
+                    if (_semaphoreCache.TryGetValue(handle, out var cached) &&
+                        ReferenceEquals(cached, semaphore))
+                    {
+                        _semaphoreCache.Remove(handle);
+                    }
+                }
             }
         }
         catch (Exception ex)
         {
-            KernelLog.Warning($"[ArisenViewportControl] Failed to dispose imported GPU image: {ex.Message}");
+            throw new CompositorResourceReleaseException(
+                "Failed to release imported compositor resources.",
+                ex);
+        }
+    }
+
+    private static async Task DisposeImportedImageAsync(ICompositionImportedGpuImage image)
+    {
+        await image.ImportCompleted;
+        if (image is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync();
+        }
+        else if (image is IDisposable disposable)
+        {
+            disposable.Dispose();
         }
     }
 
@@ -543,7 +1143,6 @@ public partial class ArisenViewportControl : Control
         if (change.Property == BoundsProperty && _isInitialized)
         {
             RequestSurfaceResize(force: false);
-            QueueNextFrame();
         }
     }
 
@@ -556,8 +1155,13 @@ public partial class ArisenViewportControl : Control
         }
 
         var size = GetPhysicalPixelSize();
-        if (!force &&
-            size.Width == _lastRequestedSurfaceWidth &&
+        if (size.Width == _pendingSurfaceWidth &&
+            size.Height == _pendingSurfaceHeight &&
+            _resizeTask is { IsCompleted: false })
+        {
+            return;
+        }
+        if (!force && size.Width == _lastRequestedSurfaceWidth &&
             size.Height == _lastRequestedSurfaceHeight)
         {
             return;
@@ -565,7 +1169,65 @@ public partial class ArisenViewportControl : Control
 
         _lastRequestedSurfaceWidth = size.Width;
         _lastRequestedSurfaceHeight = size.Height;
-        renderSubsystem.ResizeSurface(this.Handle.Handle, size.Width, size.Height);
+        _pendingSurfaceWidth = size.Width;
+        _pendingSurfaceHeight = size.Height;
+        _resizeRequestVersion++;
+        if (_resizeTask is not { IsCompleted: false })
+        {
+            _resizeTask = ProcessSurfaceResizesAsync(renderSubsystem, this.Handle.Handle);
+        }
+    }
+
+    private async Task ProcessSurfaceResizesAsync(RenderSubsystem renderSubsystem, IntPtr host)
+    {
+        _isResizing = true;
+        try
+        {
+            while (_isInitialized && !_presentationFailed)
+            {
+                await _activePresentationTask;
+                if (!_isInitialized || _presentationFailed)
+                {
+                    return;
+                }
+
+                await ClearImportedResourceCacheAsync();
+                if (!_isInitialized || _presentationFailed)
+                {
+                    return;
+                }
+
+                int requestVersion = _resizeRequestVersion;
+                int width = _pendingSurfaceWidth;
+                int height = _pendingSurfaceHeight;
+                if (!await renderSubsystem.ResizeSurfaceAsync(host, width, height))
+                {
+                    throw new InvalidOperationException(
+                        $"Render surface 0x{host.ToInt64():X} disappeared before resize {width}x{height}.");
+                }
+                if (!_isInitialized || _presentationFailed)
+                {
+                    return;
+                }
+
+                _presentationState.Reset();
+                if (requestVersion == _resizeRequestVersion)
+                {
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            EnterPresentationFailureState(new InvalidOperationException(
+                "Viewport resize ownership transition failed.",
+                ex));
+        }
+        finally
+        {
+            _isResizing = false;
+            QueueNextFrame();
+        }
     }
 
     private PixelSize GetPhysicalPixelSize()

@@ -2,6 +2,7 @@ using ArisenEditorFramework.Core;
 using ArisenEditor.Core.Services;
 using ArisenEditor.Views;
 using ReactiveUI;
+using ArisenEditorFramework.Extensions;
 
 namespace ArisenEditor.ViewModels;
 
@@ -14,6 +15,7 @@ internal class SceneViewModel : EditorPanelBase
     private bool m_IsWorldPartitionOverlayVisible;
 
     public SelectionService? SelectionService { get; }
+    public IReadOnlyList<EditorSceneViewOverlayRegistration> SceneViewOverlays { get; }
 
     public bool IsWorldPartitionOverlayVisible
     {
@@ -35,10 +37,13 @@ internal class SceneViewModel : EditorPanelBase
     public override string Id => "Scene";
     public override object Content => new SceneView { DataContext = this };
 
-    internal SceneViewModel(SelectionService? selectionService = null)
+    internal SceneViewModel(
+        SelectionService? selectionService = null,
+        IReadOnlyList<EditorSceneViewOverlayRegistration>? sceneViewOverlays = null)
     {
         m_ProjectService = EditorProjectService.Instance;
         SelectionService = selectionService;
+        SceneViewOverlays = sceneViewOverlays ?? Array.Empty<EditorSceneViewOverlayRegistration>();
         m_IsWorldPartitionOverlayVisible = m_ProjectService.UserSettings.ShowWorldPartitionOverlay;
     }
 }

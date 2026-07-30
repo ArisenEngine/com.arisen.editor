@@ -75,7 +75,10 @@
         </Border>
         
         <StackPanel Orientation="Horizontal" VerticalAlignment="Top" HorizontalAlignment="Right" Margin="10">
-            <Button Content="Capture Frame (RenderDoc)" Click="OnCaptureClick" 
+            <Button Content="{Binding RenderDocActionText}"
+                    Click="OnRenderDocActionClick"
+                    IsEnabled="{Binding IsRenderDocCaptureAvailable}"
+                    ToolTip.Tip="{Binding RenderDocCaptureStatus}"
                     Background="#444" Foreground="White" Opacity="0.8" Padding="10,5"/>
         </StackPanel>
     </Grid>

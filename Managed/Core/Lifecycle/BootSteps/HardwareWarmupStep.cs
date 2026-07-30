@@ -20,15 +20,14 @@ public class HardwareWarmupStep : IBootStep
 
     public static void InitializeBackend()
     {
-        // LoadingWindow is already on screen, so Avalonia's WinUI compositor has created its
-        // ANGLE D3D11 device. It is now safe to preload RenderDoc (installs global
-        // D3D11CreateDevice hooks) and bring up the selected RHI without corrupting the compositor.
+        // LoadingWindow is already on screen, so Avalonia has established its compositor before
+        // the selected RHI applies any explicitly requested process-start diagnostics.
         var services = EngineKernel.Instance.Services;
         var backend = services.GetService<IRHIBackend>();
         if (!backend.Initialize(services))
         {
             throw new InvalidOperationException(
-                $"Graphics subsystem failed to initialize ({backend.Name} / RenderDoc). See log.");
+                $"Graphics subsystem failed to initialize ({backend.Name}). See log.");
         }
     }
 }

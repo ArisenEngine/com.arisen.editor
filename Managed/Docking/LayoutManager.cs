@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using ArisenEditorFramework.Docking.Internal;
@@ -7,6 +8,7 @@ using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
 using Dock.Serializer;
 using ArisenEditorFramework.Core;
+using ArisenEditorFramework.Extensions;
 
 namespace ArisenEditorFramework.Docking;
 
@@ -27,9 +29,9 @@ public class LayoutManager : IEditorLayoutService
         set => _factory.PanelFactory = value;
     }
 
-    public LayoutManager()
+    public LayoutManager(IReadOnlyList<EditorPanelRegistration>? extensionPanels = null)
     {
-        _factory = new ArisenDockFactory(this);
+        _factory = new ArisenDockFactory(this, extensionPanels);
     }
 
     public void Initialize()
@@ -39,6 +41,26 @@ public class LayoutManager : IEditorLayoutService
         {
             _factory.InitLayout(_layout);
         }
+    }
+
+    public bool ActivatePanel(string panelId)
+    {
+        if (_layout == null || string.IsNullOrWhiteSpace(panelId))
+        {
+            return false;
+        }
+
+        var panel = _factory.FindDockable(
+            _layout,
+            dockable => string.Equals(dockable.Id, panelId, StringComparison.Ordinal));
+        if (panel?.Owner is not IDock owner)
+        {
+            return false;
+        }
+
+        _factory.SetActiveDockable(panel);
+        _factory.SetFocusedDockable(owner, panel);
+        return true;
     }
 
     public void ApplyPreset(string preset)

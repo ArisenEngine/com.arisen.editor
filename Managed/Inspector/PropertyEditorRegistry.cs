@@ -30,7 +30,17 @@ public static class PropertyEditorRegistry
 
     public static void RegisterEditor(IPropertyEditor editor)
     {
-        _editors.Insert(0, editor); // Insert at beginning to allow overrides
+        ArgumentNullException.ThrowIfNull(editor);
+        if (!_editors.Contains(editor))
+        {
+            _editors.Insert(0, editor); // Insert at beginning to allow overrides
+        }
+    }
+
+    public static bool UnregisterEditor(IPropertyEditor editor)
+    {
+        ArgumentNullException.ThrowIfNull(editor);
+        return _editors.Remove(editor);
     }
 
     public static Control? CreateEditor(PropertyItemViewModel property)

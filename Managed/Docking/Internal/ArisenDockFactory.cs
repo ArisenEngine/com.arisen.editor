@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ArisenEditorFramework.Core;
+using ArisenEditorFramework.Extensions;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
@@ -18,6 +20,7 @@ internal class ArisenDockFactory : Factory
 {
     private IRootDock? _rootDock;
     private readonly LayoutManager _layoutManager;
+    private readonly EditorPanelRegistration[] _extensionPanels;
     private IPanelFactory? _panelFactory;
 
     public IPanelFactory? PanelFactory
@@ -26,9 +29,12 @@ internal class ArisenDockFactory : Factory
         set => _panelFactory = value;
     }
 
-    public ArisenDockFactory(LayoutManager layoutManager)
+    public ArisenDockFactory(
+        LayoutManager layoutManager,
+        IReadOnlyList<EditorPanelRegistration>? extensionPanels = null)
     {
         _layoutManager = layoutManager;
+        _extensionPanels = extensionPanels?.ToArray() ?? Array.Empty<EditorPanelRegistration>();
     }
 
     public IRootDock CreateLayout(string preset = "Default")
@@ -68,13 +74,13 @@ internal class ArisenDockFactory : Factory
                         IsCollapsable = false,
                         VisibleDockables = CreateList<IDockable>
                         (
-                            new ToolDock { Id = "LeftPane", Proportion = 0.15, ActiveDockable = hierarchy, VisibleDockables = CreateList<IDockable>(hierarchy) },
+                            new ToolDock { Id = "LeftPane", Proportion = 0.15, ActiveDockable = hierarchy, VisibleDockables = CreatePaneDockables(EditorDockRegion.Left, hierarchy) },
                             new ProportionalDockSplitter(),
-                            new ToolDock { Id = "CenterPane", Proportion = 0.6, ActiveDockable = scene, VisibleDockables = CreateList<IDockable>(scene, gameView, projectSettings) },
+                            new ToolDock { Id = "CenterPane", Proportion = 0.6, ActiveDockable = scene, VisibleDockables = CreatePaneDockables(EditorDockRegion.Center, scene, gameView, projectSettings) },
                             new ProportionalDockSplitter(),
-                            new ToolDock { Id = "BottomPane", Proportion = 0.2, ActiveDockable = worldPartition, VisibleDockables = CreateList<IDockable>(worldPartition, console, assets) },
+                            new ToolDock { Id = "BottomPane", Proportion = 0.2, ActiveDockable = worldPartition, VisibleDockables = CreatePaneDockables(EditorDockRegion.Bottom, worldPartition, console, assets) },
                             new ProportionalDockSplitter(),
-                            new ToolDock { Id = "RightPane", Proportion = 0.15, ActiveDockable = inspector, VisibleDockables = CreateList<IDockable>(inspector) }
+                            new ToolDock { Id = "RightPane", Proportion = 0.15, ActiveDockable = inspector, VisibleDockables = CreatePaneDockables(EditorDockRegion.Right, inspector) }
                         )
                     }
                 )
@@ -91,7 +97,7 @@ internal class ArisenDockFactory : Factory
                 (
                     new ToolDock { Id = "ToolbarPane", Proportion = 0.05, ActiveDockable = toolbar, VisibleDockables = CreateList<IDockable>(toolbar) },
                     new ProportionalDockSplitter(),
-                    new ToolDock { Id = "CenterPane", Proportion = 0.6, ActiveDockable = scene, VisibleDockables = CreateList<IDockable>(scene, gameView, projectSettings) },
+                    new ToolDock { Id = "CenterPane", Proportion = 0.6, ActiveDockable = scene, VisibleDockables = CreatePaneDockables(EditorDockRegion.Center, scene, gameView, projectSettings) },
                     new ProportionalDockSplitter(),
                     new ProportionalDock
                     {
@@ -100,11 +106,11 @@ internal class ArisenDockFactory : Factory
                         IsCollapsable = false,
                         VisibleDockables = CreateList<IDockable>
                         (
-                            new ToolDock { Id = "LeftPane", Proportion = 0.3, ActiveDockable = hierarchy, VisibleDockables = CreateList<IDockable>(hierarchy) },
+                            new ToolDock { Id = "LeftPane", Proportion = 0.3, ActiveDockable = hierarchy, VisibleDockables = CreatePaneDockables(EditorDockRegion.Left, hierarchy) },
                             new ProportionalDockSplitter(),
-                            new ToolDock { Id = "BottomPane", Proportion = 0.4, ActiveDockable = worldPartition, VisibleDockables = CreateList<IDockable>(worldPartition, console, assets) },
+                            new ToolDock { Id = "BottomPane", Proportion = 0.4, ActiveDockable = worldPartition, VisibleDockables = CreatePaneDockables(EditorDockRegion.Bottom, worldPartition, console, assets) },
                             new ProportionalDockSplitter(),
-                            new ToolDock { Id = "RightPane", Proportion = 0.3, ActiveDockable = inspector, VisibleDockables = CreateList<IDockable>(inspector) }
+                            new ToolDock { Id = "RightPane", Proportion = 0.3, ActiveDockable = inspector, VisibleDockables = CreatePaneDockables(EditorDockRegion.Right, inspector) }
                         )
                     }
                 )
@@ -123,11 +129,11 @@ internal class ArisenDockFactory : Factory
                 IsCollapsable = false,
                 VisibleDockables = CreateList<IDockable>
                 (
-                    new ToolDock { Id = "LeftPane", Proportion = 0.2, ActiveDockable = hierarchy, VisibleDockables = CreateList<IDockable>(hierarchy) },
+                    new ToolDock { Id = "LeftPane", Proportion = 0.2, ActiveDockable = hierarchy, VisibleDockables = CreatePaneDockables(EditorDockRegion.Left, hierarchy) },
                     new ProportionalDockSplitter(),
-                    new ToolDock { Id = "CenterPane", Proportion = 0.6, ActiveDockable = scene, VisibleDockables = CreateList<IDockable>(scene, gameView, projectSettings) },
+                    new ToolDock { Id = "CenterPane", Proportion = 0.6, ActiveDockable = scene, VisibleDockables = CreatePaneDockables(EditorDockRegion.Center, scene, gameView, projectSettings) },
                     new ProportionalDockSplitter(),
-                    new ToolDock { Id = "RightPane", Proportion = 0.2, ActiveDockable = inspector, VisibleDockables = CreateList<IDockable>(inspector) }
+                    new ToolDock { Id = "RightPane", Proportion = 0.2, ActiveDockable = inspector, VisibleDockables = CreatePaneDockables(EditorDockRegion.Right, inspector) }
                 )
             };
 
@@ -142,7 +148,7 @@ internal class ArisenDockFactory : Factory
                     new ToolDock { Id = "ToolbarPane", Proportion = 0.08, GripMode = GripMode.Hidden, ActiveDockable = toolbar, VisibleDockables = CreateList<IDockable>(toolbar) },
                     mainLayout,
                     new ProportionalDockSplitter(),
-                    new ToolDock { Id = "BottomPane", Proportion = 0.17, ActiveDockable = worldPartition, VisibleDockables = CreateList<IDockable>(worldPartition, console, assets, iconPreview) },
+                    new ToolDock { Id = "BottomPane", Proportion = 0.17, ActiveDockable = worldPartition, VisibleDockables = CreatePaneDockables(EditorDockRegion.Bottom, worldPartition, console, assets, iconPreview) },
                     new ToolDock { Id = "FooterPane", Proportion = 0.03, GripMode = GripMode.Hidden, ActiveDockable = footer, VisibleDockables = CreateList<IDockable>(footer) }
                 )
             };
@@ -161,6 +167,29 @@ internal class ArisenDockFactory : Factory
     }
 
     public override IRootDock CreateLayout() => CreateLayout("Default");
+
+    private IList<IDockable> CreatePaneDockables(
+        EditorDockRegion region,
+        params IDockable[] builtInDockables)
+    {
+        var dockables = new List<IDockable>(builtInDockables.Length + _extensionPanels.Length);
+        dockables.AddRange(builtInDockables);
+        foreach (var panel in _extensionPanels)
+        {
+            if (panel.DockRegion != region)
+            {
+                continue;
+            }
+
+            dockables.Add(new ToolDocument
+            {
+                Id = panel.Id,
+                Title = panel.Title
+            });
+        }
+
+        return CreateList<IDockable>(dockables.ToArray());
+    }
 
     public override void InitLayout(IDockable layout)
     {

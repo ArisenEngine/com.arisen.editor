@@ -8,6 +8,7 @@ using ArisenEditor.Core.Services;
 using ArisenEditor.Core.Views;
 using ArisenEditor.ViewModels;
 using ArisenEditor.Views;
+using ArisenEditorFramework.Extensions;
 using ReactiveUI;
 
 namespace ArisenEditor.Core.Factory;
@@ -17,6 +18,8 @@ public class ArisenPanelFactory : DefaultPanelFactory
     private readonly SelectionService _selectionService = new();
     public ISelectionService SelectionService => _selectionService;
     private readonly Dictionary<string, IEditorPanel> _panelCache = new();
+    private readonly List<EditorSceneViewOverlayRegistration> m_SceneViewOverlays = new();
+    internal Func<string, bool>? PanelActivator { get; set; }
 
     public void Initialize()
     {
@@ -35,7 +38,9 @@ public class ArisenPanelFactory : DefaultPanelFactory
             return inspector;
         });
         
-        RegisterPanel("Scene", () => new SceneViewModel(_selectionService));
+        RegisterPanel("Scene", () => new SceneViewModel(
+            _selectionService,
+            m_SceneViewOverlays.ToArray()));
         RegisterPanel("GameView", () => new GameViewModel());
         RegisterPanel("Console", () => new ConsoleViewModel());
         RegisterPanel("Assets", () =>
@@ -48,7 +53,9 @@ public class ArisenPanelFactory : DefaultPanelFactory
         });
         RegisterPanel("PackageManager", () => new PackageManagerViewModel());
         RegisterPanel("ProjectSettings", () => new ProjectSettingsViewModel());
-        RegisterPanel("WorldPartition", () => new WorldPartitionViewModel(_selectionService));
+        RegisterPanel(
+            "WorldPartition",
+            () => new WorldPartitionViewModel(_selectionService, PanelActivator));
 
         RegisterPanel("Viewport", () => new EditorPanelWrapper("Viewport", "Viewport", new Avalonia.Controls.TextBlock { Text = "Viewport Placeholder", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center }));
         RegisterPanel("IconPreview", () => new IconPreviewViewModel());
@@ -67,6 +74,28 @@ public class ArisenPanelFactory : DefaultPanelFactory
         var panel = base.CreatePanel(panelId);
         _panelCache[panelId] = panel;
         return panel;
+    }
+
+    public override bool UnregisterPanel(string panelId)
+    {
+        bool removed = base.UnregisterPanel(panelId);
+        if (_panelCache.Remove(panelId, out var panel) && panel is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+
+        return removed;
+    }
+
+    internal void RegisterSceneViewOverlay(EditorSceneViewOverlayRegistration overlay)
+    {
+        ArgumentNullException.ThrowIfNull(overlay);
+        m_SceneViewOverlays.Add(overlay);
+    }
+
+    internal void UnregisterSceneViewOverlay(EditorSceneViewOverlayRegistration overlay)
+    {
+        m_SceneViewOverlays.Remove(overlay);
     }
 }
 

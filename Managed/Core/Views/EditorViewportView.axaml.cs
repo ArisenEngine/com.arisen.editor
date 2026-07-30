@@ -34,11 +34,13 @@ public partial class EditorViewportView : UserControl
         }
     }
 
-    private void OnCaptureClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void OnRenderDocActionClick(
+        object? sender,
+        Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is EditorViewportViewModel vm)
         {
-            vm.Capture();
+            await vm.ExecuteRenderDocActionAsync();
         }
     }
 
