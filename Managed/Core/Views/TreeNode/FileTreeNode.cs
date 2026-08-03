@@ -228,7 +228,11 @@ internal class FileTreeNode : TreeNodeBase
             if (childObj is FileTreeNode child && child.Path == e.OldFullPath)
             {
                 child.Path = e.FullPath;
-                child.Name = e.Name.Split(System.IO.Path.DirectorySeparatorChar)[^1] ?? child.Name;
+                var renamedName = System.IO.Path.GetFileName(e.FullPath);
+                if (!string.IsNullOrEmpty(renamedName))
+                {
+                    child.Name = renamedName;
+                }
                 break;
             }
         }
@@ -254,14 +258,20 @@ internal class FileTreeNode : TreeNodeBase
 
     protected override void OnCancelEdit()
     {
-        Name = m_UndoName;
+        if (m_UndoName != null)
+        {
+            Name = m_UndoName;
+        }
     }
 
     protected override void OnEndEdit()
     {
         if (Immutable)
         {
-            Name = m_UndoName;
+            if (m_UndoName != null)
+            {
+                Name = m_UndoName;
+            }
         }
         else if (Name != m_UndoName)
         {
@@ -293,7 +303,10 @@ internal class FileTreeNode : TreeNodeBase
             }
             catch (Exception e)
             {
-                Name = m_UndoName;
+                if (m_UndoName != null)
+                {
+                    Name = m_UndoName;
+                }
                 Path = oldPath;
                 var _ = ArisenEditorFramework.Utilities.MessageBoxUtility.ShowMessageBoxStandard("Rename failed", $"{e.Message}");
             }

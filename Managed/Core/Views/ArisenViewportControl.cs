@@ -38,6 +38,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
     private RenderSubsystem? _renderSubsystem;
     private IGraphicsDeviceLifecycleService? _graphicsDeviceLifecycle;
     private EditorViewportSurfaceLease? _surfaceOwnershipLease;
+    private RenderSurfaceRegistration _renderSurfaceRegistration;
     private CancellationTokenSource _initializationCancellation = new();
     
     private bool _isAttached;
@@ -88,6 +89,11 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
     public string ParticipantId => $"EditorViewport:{Handle.Handle.ToInt64():X}";
 
     public int Order => 100;
+
+    public RenderSurfaceRegistration CurrentRenderSurfaceRegistration =>
+        _surfaceRegistered ? _renderSurfaceRegistration : default;
+
+    public event Action<RenderSurfaceRegistration>? RenderSurfaceRegistrationChanged;
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
@@ -297,26 +303,26 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
                 var surfaceType = _viewportKind == EditorViewportKind.SceneView
                     ? SurfaceType.SceneView
                     : SurfaceType.GameView;
-                bool registered = await _renderSubsystem.RegisterSurfaceAsync(
+                RenderSurfaceRegistration registration = await _renderSubsystem.RegisterSurfaceAsync(
                     this.Handle.Handle,
                     _viewportKind.ToString(),
                     surfaceType,
                     pixelSize.Width,
                     pixelSize.Height);
-                if (!registered)
+                if (!registration.IsValid)
                 {
                     throw new InvalidOperationException(
                         $"Render surface 0x{Handle.Handle.ToInt64():X} was not registered.");
                 }
-                _surfaceRegistered = true;
+                SetRenderSurfaceRegistration(registration);
                 if (lifecycleVersion != _lifecycleVersion || !_isAttached)
                 {
-                    if (!await _renderSubsystem.UnregisterSurfaceAsync(Handle.Handle))
+                    if (!await _renderSubsystem.UnregisterSurfaceAsync(registration))
                     {
                         throw new InvalidOperationException(
                             $"Render surface 0x{Handle.Handle.ToInt64():X} could not be removed after initialization was invalidated.");
                     }
-                    _surfaceRegistered = false;
+                    SetRenderSurfaceRegistration(default);
                     return;
                 }
                 _lastRequestedSurfaceWidth = pixelSize.Width;
@@ -345,7 +351,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             try
             {
                 await ReleaseViewportResourcesAsync(
-                    Handle.Handle,
+                    _renderSurfaceRegistration,
                     _renderSubsystem,
                     releaseSurfaceOwnership: true);
                 ResetViewportState();
@@ -366,7 +372,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             try
             {
                 await ReleaseViewportResourcesAsync(
-                    Handle.Handle,
+                    _renderSurfaceRegistration,
                     _renderSubsystem,
                     releaseSurfaceOwnership: true);
                 ResetViewportState();
@@ -405,14 +411,14 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         _isInitialized = false;
         _isResizing = true;
         _shutdownTask = ShutdownAsync(
-            this.Handle.Handle,
+            _renderSurfaceRegistration,
             _renderSubsystem,
             initializeTask);
         ObserveLifecycleTask(_shutdownTask, "shutdown");
     }
 
     private async Task ShutdownAsync(
-        IntPtr host,
+        RenderSurfaceRegistration registration,
         RenderSubsystem? renderSubsystem,
         Task initializeTask)
     {
@@ -428,7 +434,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         try
         {
             await ReleaseViewportResourcesAsync(
-                host,
+                registration,
                 renderSubsystem ?? _renderSubsystem,
                 releaseSurfaceOwnership: false);
         }
@@ -449,7 +455,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
     }
 
     private async Task ReleaseViewportResourcesAsync(
-        IntPtr host,
+        RenderSurfaceRegistration registration,
         RenderSubsystem? renderSubsystem,
         bool releaseSurfaceOwnership)
     {
@@ -468,13 +474,19 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
 
         if (_surfaceRegistered)
         {
-            if (renderSubsystem == null ||
-                !await renderSubsystem.UnregisterSurfaceAsync(host))
+            if (!registration.IsValid)
             {
                 throw new InvalidOperationException(
-                    $"Render surface 0x{host.ToInt64():X} was not removed at the render-thread boundary.");
+                    "Viewport marked a render surface as registered without a valid registration token.");
             }
-            _surfaceRegistered = false;
+            if (renderSubsystem == null ||
+                !await renderSubsystem.UnregisterSurfaceAsync(registration))
+            {
+                throw new InvalidOperationException(
+                    $"Render surface 0x{registration.Host.ToInt64():X}, generation {registration.Generation} " +
+                    "was not removed at the render-thread boundary.");
+            }
+            SetRenderSurfaceRegistration(default);
         }
 
         ElementComposition.SetElementChildVisual(this, null);
@@ -506,6 +518,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         _pendingSurfaceWidth = 0;
         _pendingSurfaceHeight = 0;
         _resizeRequestVersion = 0;
+        SetRenderSurfaceRegistration(default);
         Interlocked.Exchange(ref _outputReadyDispatchQueued, 0);
         _updateQueued = false;
         _isUpdating = false;
@@ -742,9 +755,48 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             $"{lease.Generation} for '{lease.OwnerId}'.");
     }
 
-    private void OnOutputFrameReady(IntPtr host)
+    private void SetRenderSurfaceRegistration(RenderSurfaceRegistration registration)
     {
-        if (host != Handle.Handle || !Volatile.Read(ref _isInitialized) ||
+        bool registered = registration.IsValid;
+        if (_renderSurfaceRegistration == registration &&
+            _surfaceRegistered == registered)
+        {
+            return;
+        }
+
+        _renderSurfaceRegistration = registration;
+        _surfaceRegistered = registered;
+
+        Action<RenderSurfaceRegistration>? handlers = RenderSurfaceRegistrationChanged;
+        if (handlers == null)
+        {
+            return;
+        }
+
+        foreach (Action<RenderSurfaceRegistration> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(registration);
+            }
+            catch (Exception exception)
+            {
+                KernelLog.WarningFormat(
+                    "[ArisenViewportControl] Surface-registration observer failed. Host=0x{0:X}, Generation={1}, Observer={2}.{3}, Error={4}: {5}",
+                    registration.Host.ToInt64(),
+                    registration.Generation,
+                    handler.Method.DeclaringType?.FullName ?? "<unknown>",
+                    handler.Method.Name,
+                    exception.GetType().Name,
+                    exception.Message);
+            }
+        }
+    }
+
+    private void OnOutputFrameReady(RenderSurfaceRegistration registration)
+    {
+        if (registration != _renderSurfaceRegistration ||
+            !Volatile.Read(ref _isInitialized) ||
             Interlocked.CompareExchange(ref _outputReadyDispatchQueued, 1, 0) != 0)
         {
             return;
@@ -785,7 +837,9 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             if (_renderSubsystem == null) return;
         }
 
-        if (!_renderSubsystem.GetOutputInfo(this.Handle.Handle, out var info))
+        RenderSurfaceRegistration registration = _renderSurfaceRegistration;
+        if (!registration.IsValid ||
+            !_renderSubsystem.GetOutputInfo(registration, out var info))
         {
             QueueNextFrame();
             return;
@@ -801,14 +855,14 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
 
             if (decision.ShouldReleaseSignalSemaphore)
             {
-                ReleaseConsumedSemaphore(info.SignalSemaphoreHandle);
+                ReleaseConsumedSemaphore(registration, info.SignalSemaphoreHandle);
             }
 
             QueueNextFrame();
             return;
         }
 
-        _activePresentationTask = RenderFrameAsync(info);
+        _activePresentationTask = RenderFrameAsync(registration, info);
     }
 
     private void LogPresentationSkipIfUseful(in RenderOutputInfo info, RenderOutputPresentationSkipReason reason)
@@ -835,7 +889,9 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             $"wait=0x{info.WaitSemaphoreHandle.ToInt64():X}, signal=0x{info.SignalSemaphoreHandle.ToInt64():X}");
     }
 
-    private async Task RenderFrameAsync(RenderOutputInfo info)
+    private async Task RenderFrameAsync(
+        RenderSurfaceRegistration registration,
+        RenderOutputInfo info)
     {
         _isUpdating = true;
         
@@ -843,7 +899,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         {
             // CRITICAL: Await GPU completion before attempting to import or update.
             // This prevents race conditions where Avalonia reads an image Vulkan is still writing.
-            await _renderSubsystem!.WaitForRenderTicketAsync(this.Handle.Handle, info.Ticket);
+            await _renderSubsystem!.WaitForRenderTicketAsync(registration, info.Ticket);
 
             var interop = _interop;
             var surface = _surface;
@@ -914,7 +970,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
                     semaphoreType);
                 await surface.UpdateWithSemaphoresAsync(importedImage, waitSemaphore, signalSemaphore);
 
-                CompleteConsumedSemaphore(info.SignalSemaphoreHandle);
+                CompleteConsumedSemaphore(registration, info.SignalSemaphoreHandle);
                 info.SignalSemaphoreHandle = IntPtr.Zero;
             }
             else
@@ -929,10 +985,10 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
 
             // Report consumption back to engine for back-pressure
             var consumptionReported = _renderSubsystem?.ReportConsumedFrameIndex(
-                this.Handle.Handle,
+                registration,
                 info.FrameIndex) == true;
             var lastConsumedFrameIndex = _renderSubsystem?.GetLastConsumedFrameIndex(
-                this.Handle.Handle) ?? 0;
+                registration) ?? 0;
             var visual = _visual;
             if (visual != null)
             {
@@ -979,25 +1035,29 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         }
         finally
         {
-            ReleaseConsumedSemaphore(info.SignalSemaphoreHandle);
+            ReleaseConsumedSemaphore(registration, info.SignalSemaphoreHandle);
             _isUpdating = false;
             QueueNextFrame();
         }
     }
 
-    private void ReleaseConsumedSemaphore(IntPtr handle)
+    private void ReleaseConsumedSemaphore(
+        RenderSurfaceRegistration registration,
+        IntPtr handle)
     {
         if (handle != IntPtr.Zero)
         {
-            _renderSubsystem?.ReleaseConsumedSemaphoreHandle(this.Handle.Handle, handle);
+            _renderSubsystem?.ReleaseConsumedSemaphoreHandle(registration, handle);
         }
     }
 
-    private void CompleteConsumedSemaphore(IntPtr handle)
+    private void CompleteConsumedSemaphore(
+        RenderSurfaceRegistration registration,
+        IntPtr handle)
     {
         if (handle != IntPtr.Zero)
         {
-            _renderSubsystem?.CompleteConsumedSemaphoreHandle(this.Handle.Handle, handle);
+            _renderSubsystem?.CompleteConsumedSemaphoreHandle(registration, handle);
         }
     }
 
@@ -1052,7 +1112,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         _isResizing = true;
         _updateQueued = false;
         var renderSubsystem = _renderSubsystem;
-        var host = this.Handle.Handle;
+        RenderSurfaceRegistration registration = _renderSurfaceRegistration;
         if (renderSubsystem != null)
         {
             renderSubsystem.OutputFrameReady -= OnOutputFrameReady;
@@ -1064,15 +1124,17 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             $"Error={exception.Message}");
         if (_shutdownTask.IsCompleted)
         {
-            _shutdownTask = ReleaseFailedPresentationAsync(host, renderSubsystem);
+            _shutdownTask = ReleaseFailedPresentationAsync(registration, renderSubsystem);
         }
     }
 
-    private async Task ReleaseFailedPresentationAsync(IntPtr host, RenderSubsystem? renderSubsystem)
+    private async Task ReleaseFailedPresentationAsync(
+        RenderSurfaceRegistration registration,
+        RenderSubsystem? renderSubsystem)
     {
         // Defer until the presentation/resize callback that detected the failure has returned.
         await Task.Yield();
-        await ShutdownAsync(host, renderSubsystem, _initializeTask);
+        await ShutdownAsync(registration, renderSubsystem, _initializeTask);
     }
 
     private async Task ClearImportedResourceCacheAsync()
@@ -1174,11 +1236,15 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         _resizeRequestVersion++;
         if (_resizeTask is not { IsCompleted: false })
         {
-            _resizeTask = ProcessSurfaceResizesAsync(renderSubsystem, this.Handle.Handle);
+            _resizeTask = ProcessSurfaceResizesAsync(
+                renderSubsystem,
+                _renderSurfaceRegistration);
         }
     }
 
-    private async Task ProcessSurfaceResizesAsync(RenderSubsystem renderSubsystem, IntPtr host)
+    private async Task ProcessSurfaceResizesAsync(
+        RenderSubsystem renderSubsystem,
+        RenderSurfaceRegistration registration)
     {
         _isResizing = true;
         try
@@ -1200,10 +1266,11 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
                 int requestVersion = _resizeRequestVersion;
                 int width = _pendingSurfaceWidth;
                 int height = _pendingSurfaceHeight;
-                if (!await renderSubsystem.ResizeSurfaceAsync(host, width, height))
+                if (!await renderSubsystem.ResizeSurfaceAsync(registration, width, height))
                 {
                     throw new InvalidOperationException(
-                        $"Render surface 0x{host.ToInt64():X} disappeared before resize {width}x{height}.");
+                        $"Render surface 0x{registration.Host.ToInt64():X}, generation {registration.Generation} " +
+                        $"disappeared before resize {width}x{height}.");
                 }
                 if (!_isInitialized || _presentationFailed)
                 {

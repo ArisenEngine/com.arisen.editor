@@ -9,7 +9,6 @@ using ArisenKernel.Diagnostics;
 using Avalonia;
 using Avalonia.ReactiveUI;
 using ArisenEngine.Rendering;
-using ArisenEngine.Core.Diagnostics;
 using ArisenEngine.Core.Assets;
 using ArisenEngine.Core.Automation;
 using ArisenEngine.Resources.Serialization;
@@ -131,7 +130,6 @@ public class EditorPackage : IPackageEntry, IApplicationHost
             App.ClearEditorExtensions();
         }
 
-        EditorLog.Info("[EditorPackage] UI Loop exited. Shutting down diagnostics...");
-        Logger.Dispose();
+        EditorLog.Info("[EditorPackage] UI Loop exited. Returning control for engine shutdown.");
     }
 }

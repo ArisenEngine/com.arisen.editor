@@ -94,9 +94,9 @@ internal partial class ConsoleView : UserControl
 
     private void LogDataGrid_OnSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (m_ViewModel != null)
+        if (m_ViewModel != null && e.Source is DataGrid dataGrid)
         {
-            m_ViewModel.SelectedItem = ((DataGrid) e.Source!)?.SelectedItem as MessageItemNode;
+            m_ViewModel.SelectedItem = dataGrid.SelectedItem as MessageItemNode;
         }
     }
 }

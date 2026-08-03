@@ -2,6 +2,9 @@
   "id": "com.arisen.editor",
   "name": "Arisen Editor",
   "version": "1.0.0",
+  "engine": {
+    "minVersion": "0.1.0"
+  },
   "layer": "tooling",
   "author": "Arisen Team",
   "description": "The official Arisen Engine Editor visual authoring environment.",

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace ArisenEditor.Core.Validation;
 
@@ -54,6 +55,7 @@ public sealed class EditorViewportSmokeChecks
 {
     public bool RenderDocStartupExpectationMet { get; init; }
     public bool RenderDocRestartExpectationMet { get; init; }
+    public bool RenderDocCaptureExpectationMet { get; init; }
     public bool InteropResourceCachesBounded { get; init; }
     public bool SceneFirstFramePresented { get; init; }
     public bool ScenePresentedBeforeGameViewActivation { get; init; }
@@ -78,6 +80,7 @@ public sealed class EditorViewportSmokeChecks
     public bool Passed =>
         RenderDocStartupExpectationMet &&
         RenderDocRestartExpectationMet &&
+        RenderDocCaptureExpectationMet &&
         InteropResourceCachesBounded &&
         SceneFirstFramePresented &&
         ScenePresentedBeforeGameViewActivation &&
@@ -116,7 +119,7 @@ public sealed class EditorWorldPartitionSmokeObservation
 
 public sealed class EditorViewportSmokeArtifact
 {
-    public int SchemaVersion { get; init; } = 6;
+    public int SchemaVersion { get; init; } = 8;
     public string CapturedAtUtc { get; init; } = DateTimeOffset.UtcNow.ToString("O");
     public required string Profile { get; init; }
     public int TimeoutSeconds { get; init; }
@@ -129,6 +132,12 @@ public sealed class EditorViewportSmokeArtifact
     public bool RenderDocAvailableAfterRestart { get; init; }
     public ulong GraphicsGenerationBeforeRestart { get; init; }
     public ulong GraphicsGenerationAfterRestart { get; init; }
+    public bool RenderDocCaptureExpected { get; init; }
+    public bool RenderDocCaptureRequested { get; init; }
+    public bool RenderDocCaptureSucceeded { get; init; }
+    public ulong RenderDocCaptureRequestId { get; init; }
+    public string RenderDocCaptureDiagnostic { get; init; } = string.Empty;
+    public string RenderDocCapturePath { get; init; } = string.Empty;
     public int GameViewActivationCount { get; init; }
     public int SceneResizeRequestCount { get; init; }
     public int SceneResizeTransitionCount { get; init; }
@@ -161,6 +170,7 @@ public sealed class EditorViewportSmokeState
 
     private readonly bool m_ExpectRenderDocAtStartup;
     private readonly bool m_ExpectRenderDocRestart;
+    private readonly bool m_ExpectRenderDocCapture;
     private EditorViewportSmokeStage m_Stage = EditorViewportSmokeStage.WaitingForSceneFirstFrame;
     private bool m_RenderDocAvailabilityObserved;
     private bool m_RenderDocAvailableAtStartup;
@@ -169,6 +179,11 @@ public sealed class EditorViewportSmokeState
     private bool m_RenderDocAvailableAfterRestart;
     private ulong m_GraphicsGenerationBeforeRestart;
     private ulong m_GraphicsGenerationAfterRestart;
+    private bool m_RenderDocCaptureRequested;
+    private bool m_RenderDocCaptureSucceeded;
+    private ulong m_RenderDocCaptureRequestId;
+    private string m_RenderDocCaptureDiagnostic = string.Empty;
+    private string m_RenderDocCapturePath = string.Empty;
     private bool m_ScenePresentedBeforeGameViewActivation;
     private int m_GameViewActivationCount;
     private Guid m_WorldGuid;
@@ -215,16 +230,23 @@ public sealed class EditorViewportSmokeState
 
     public EditorViewportSmokeState(
         bool expectRenderDocAtStartup = false,
-        bool expectRenderDocRestart = false)
+        bool expectRenderDocRestart = false,
+        bool expectRenderDocCapture = false)
     {
         if (expectRenderDocAtStartup && expectRenderDocRestart)
         {
             throw new ArgumentException(
                 "The viewport smoke cannot require both process-start RenderDoc and an in-process RenderDoc restart.");
         }
+        if (expectRenderDocCapture && !expectRenderDocRestart)
+        {
+            throw new ArgumentException(
+                "The viewport smoke cannot capture through RenderDoc without first requesting the in-process RenderDoc restart.");
+        }
 
         m_ExpectRenderDocAtStartup = expectRenderDocAtStartup;
         m_ExpectRenderDocRestart = expectRenderDocRestart;
+        m_ExpectRenderDocCapture = expectRenderDocCapture;
     }
 
     public bool IsComplete =>
@@ -240,6 +262,10 @@ public sealed class EditorViewportSmokeState
           m_RenderDocRestartCompleted &&
           m_RenderDocAvailableAfterRestart &&
           m_GraphicsGenerationAfterRestart > m_GraphicsGenerationBeforeRestart)) &&
+        (!m_ExpectRenderDocCapture ||
+         (m_RenderDocCaptureRequested &&
+          m_RenderDocCaptureSucceeded &&
+          !string.IsNullOrWhiteSpace(m_RenderDocCapturePath))) &&
         (!m_TerrainPaintAvailable || m_TerrainPaintActivated);
 
     public EditorViewportSmokeAction Observe(in EditorViewportPresentationObservation observation)
@@ -576,6 +602,67 @@ public sealed class EditorViewportSmokeState
         m_Stage = EditorViewportSmokeStage.WaitingForPostRestartConcurrentFrames;
     }
 
+    public void NotifyRenderDocCaptureRequested(ulong requestId)
+    {
+        if (!m_ExpectRenderDocCapture ||
+            !m_RenderDocRestartCompleted ||
+            m_Stage != EditorViewportSmokeStage.WaitingForPostRestartConcurrentFrames)
+        {
+            Fail("RenderDoc capture was requested outside its post-restart smoke stage.");
+            return;
+        }
+        if (requestId == 0 || m_RenderDocCaptureRequested)
+        {
+            Fail("RenderDoc capture did not publish one valid request identity.");
+            return;
+        }
+
+        m_RenderDocCaptureRequested = true;
+        m_RenderDocCaptureRequestId = requestId;
+    }
+
+    public void ObserveRenderDocCaptureCompleted(
+        ulong requestId,
+        bool succeeded,
+        string diagnostic,
+        string capturePath)
+    {
+        if (!m_RenderDocCaptureRequested ||
+            requestId != m_RenderDocCaptureRequestId ||
+            m_Stage != EditorViewportSmokeStage.WaitingForPostRestartConcurrentFrames)
+        {
+            Fail("RenderDoc capture completed without its matching post-restart request.");
+            return;
+        }
+
+        m_RenderDocCaptureDiagnostic = diagnostic ?? string.Empty;
+        m_RenderDocCapturePath = capturePath ?? string.Empty;
+        if (!succeeded)
+        {
+            Fail(string.IsNullOrWhiteSpace(diagnostic)
+                ? "The post-restart RenderDoc frame capture failed."
+                : $"The post-restart RenderDoc frame capture failed: {diagnostic}");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(m_RenderDocCapturePath))
+        {
+            Fail("The post-restart RenderDoc capture succeeded without publishing its artifact path.");
+            return;
+        }
+
+        var captureFile = new FileInfo(m_RenderDocCapturePath);
+        if (!captureFile.Exists || captureFile.Length == 0)
+        {
+            Fail(
+                $"The post-restart RenderDoc capture artifact is missing or empty: '{m_RenderDocCapturePath}'.");
+            return;
+        }
+
+        m_RenderDocCapturePath = captureFile.FullName;
+        m_RenderDocCaptureSucceeded = true;
+    }
+
     public void NotifyTerrainPaintActivated()
     {
         if (!m_TerrainPaintAvailable)
@@ -681,6 +768,12 @@ public sealed class EditorViewportSmokeState
             RenderDocAvailableAfterRestart = m_RenderDocAvailableAfterRestart,
             GraphicsGenerationBeforeRestart = m_GraphicsGenerationBeforeRestart,
             GraphicsGenerationAfterRestart = m_GraphicsGenerationAfterRestart,
+            RenderDocCaptureExpected = m_ExpectRenderDocCapture,
+            RenderDocCaptureRequested = m_RenderDocCaptureRequested,
+            RenderDocCaptureSucceeded = m_RenderDocCaptureSucceeded,
+            RenderDocCaptureRequestId = m_RenderDocCaptureRequestId,
+            RenderDocCaptureDiagnostic = m_RenderDocCaptureDiagnostic,
+            RenderDocCapturePath = m_RenderDocCapturePath,
             GameViewActivationCount = m_GameViewActivationCount,
             SceneResizeRequestCount = m_SceneResizeRequestCount,
             SceneResizeTransitionCount = m_SceneResizeTransitionCount,
@@ -721,6 +814,16 @@ public sealed class EditorViewportSmokeState
                       m_RenderDocAvailableAfterRestart &&
                       m_GraphicsGenerationBeforeRestart != 0 &&
                       m_GraphicsGenerationAfterRestart > m_GraphicsGenerationBeforeRestart,
+            RenderDocCaptureExpectationMet =
+                !m_ExpectRenderDocCapture
+                    ? !m_RenderDocCaptureRequested &&
+                      !m_RenderDocCaptureSucceeded &&
+                      m_RenderDocCaptureRequestId == 0 &&
+                      string.IsNullOrEmpty(m_RenderDocCapturePath)
+                    : m_RenderDocCaptureRequested &&
+                      m_RenderDocCaptureSucceeded &&
+                      m_RenderDocCaptureRequestId != 0 &&
+                      !string.IsNullOrWhiteSpace(m_RenderDocCapturePath),
             InteropResourceCachesBounded =
                 m_MaxSceneImportedImageCount == RequiredImportedImagesPerViewport &&
                 m_MaxSceneImportedSemaphoreCount == RequiredImportedSemaphoresPerViewport &&

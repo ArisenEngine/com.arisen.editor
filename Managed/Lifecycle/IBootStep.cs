@@ -12,8 +12,8 @@ public interface IBootStep
 
 public class BootContext
 {
-    public string ProjectPath { get; set; }
-    public object ProjectMetadata { get; set; }
+    public string ProjectPath { get; set; } = string.Empty;
+    public object? ProjectMetadata { get; set; }
     public bool Success { get; set; } = true;
-    public string ErrorMessage { get; set; }
+    public string? ErrorMessage { get; set; }
 }

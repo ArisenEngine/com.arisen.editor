@@ -11,80 +11,22 @@ namespace ArisenEditor.Converters;
 
 internal class ConsoleViewIconConverter : IValueConverter
 {
-    private static Bitmap m_Info;
-    private static Bitmap InfoIcon
-    {
-        get
-        {
-            if (m_Info == null)
-            {
-                using (var fileStream = AssetLoader.Open(new Uri("avares://Com.Arisen.Editor/Assets/Icons/info.png")))
-                {
-                    m_Info = new Bitmap(fileStream);
-                }
-            }
+    private static Bitmap? s_Info;
+    private static Bitmap InfoIcon => s_Info ??= LoadIcon("info.png");
 
-            return m_Info;
-        }
-    }
-    
-    private static Bitmap m_Log;
-    private static Bitmap LogIcon
-    {
-        get
-        {
-            if (m_Log == null)
-            {
-                using (var fileStream = AssetLoader.Open(new Uri("avares://Com.Arisen.Editor/Assets/Icons/log.png")))
-                {
-                    m_Log = new Bitmap(fileStream);
-                }
-            }
+    private static Bitmap? s_Log;
+    private static Bitmap LogIcon => s_Log ??= LoadIcon("log.png");
 
-            return m_Log;
-        }
-    }
-    
-    private static Bitmap m_Warning;
-    private static Bitmap WarningIcon
-    {
-        get
-        {
-            if (m_Warning == null)
-            {
-                using (var fileStream = AssetLoader.Open(new Uri("avares://Com.Arisen.Editor/Assets/Icons/warning.png")))
-                {
-                    m_Warning = new Bitmap(fileStream);
-                }
-            }
+    private static Bitmap? s_Warning;
+    private static Bitmap WarningIcon => s_Warning ??= LoadIcon("warning.png");
 
-            return m_Warning;
-        }
-    }
-    
-    private static Bitmap m_Error;
-    private static Bitmap ErrorIcon
-    {
-        get
-        {
-            if (m_Error == null)
-            {
-                using (var fileStream = AssetLoader.Open(new Uri("avares://Com.Arisen.Editor/Assets/Icons/error.png")))
-                {
-                    m_Error = new Bitmap(fileStream);
-                }
-            }
-
-            return m_Error;
-        }
-    }
+    private static Bitmap? s_Error;
+    private static Bitmap ErrorIcon => s_Error ??= LoadIcon("error.png");
     
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        if (value != null)
+        if (value is MessageItemNode messageItemNode)
         {
-            MessageItemNode messageItemNode = value as MessageItemNode;
-
             switch (messageItemNode.LogLevel)
             {
                 case LogLevel.Error:
@@ -99,6 +41,12 @@ internal class ConsoleViewIconConverter : IValueConverter
         }
         
         return null;
+    }
+
+    private static Bitmap LoadIcon(string fileName)
+    {
+        using var stream = AssetLoader.Open(new Uri($"avares://Com.Arisen.Editor/Assets/Icons/{fileName}"));
+        return new Bitmap(stream);
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

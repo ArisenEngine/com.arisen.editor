@@ -9,7 +9,7 @@ public class EditorConfig : ISerializationCallbackReceiver
 {
     public readonly static string EDITOR_CONFIG_PATH = "./configs/editor_config.yaml";
 
-    public static EditorConfig Instance { get; set; }
+    public static EditorConfig Instance { get; set; } = new();
 
     [YamlMember]
     public List<EngineProjectMetadata> Projects { get; set; } = new List<EngineProjectMetadata>();

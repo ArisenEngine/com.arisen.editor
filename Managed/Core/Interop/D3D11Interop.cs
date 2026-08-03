@@ -1,10 +1,12 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using ArisenEditor.Core.Services;
 using ArisenKernel.Diagnostics;
 
 namespace ArisenEditor.Core.Interop;
 
+[SupportedOSPlatform("windows")]
 public class D3D11Interop : IDisposable
 {
     private static D3D11Interop? s_Instance;

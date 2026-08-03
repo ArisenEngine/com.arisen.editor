@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using ArisenEditor.Core.Services;
 using ArisenEngine.Core.Diagnostics;
@@ -13,92 +14,105 @@ namespace ArisenEditor.Core.Lifecycle;
 /// </summary>
 public class EditorEngineRunner : IDisposable
 {
-    private Thread m_EngineThread;
-    private CancellationTokenSource m_CancellationTokenSource;
-    private Stopwatch m_Stopwatch;
+    private const float TargetFrameTime = 1.0f / 60.0f;
+    private readonly EditorEngineThreadOwner m_ThreadOwner;
 
-    private float m_TargetFrameTime = 1.0f / 60.0f; // 60 FPS Target for Editor
+    public EditorEngineRunner()
+    {
+        m_ThreadOwner = new EditorEngineThreadOwner(
+            EngineLoop,
+            "Arisen_Engine_MainThread",
+            ThreadPriority.AboveNormal);
+    }
 
-    public bool IsRunning => m_EngineThread != null && m_EngineThread.IsAlive;
+    public bool IsRunning => m_ThreadOwner.IsRunning;
+    public Task Completion => m_ThreadOwner.Completion;
 
     public void Start()
     {
-        if (IsRunning) return;
-
-        m_CancellationTokenSource = new CancellationTokenSource();
-        m_Stopwatch = new Stopwatch();
-
-        m_EngineThread = new Thread(EngineLoop)
-        {
-            Name = "Arisen_Engine_MainThread",
-            IsBackground = false, // Changed to false to ensure graceful cleanup before process exit
-            Priority = ThreadPriority.AboveNormal
-        };
-
-        m_EngineThread.Start();
+        m_ThreadOwner.Start();
     }
 
     public void Stop()
     {
-        if (!IsRunning) return;
+        if (!m_ThreadOwner.HasThreadOwnership) return;
 
         EditorLog.Log("[EditorEngineRunner] Stop requested. Waiting for engine thread to exit...");
-        m_CancellationTokenSource.Cancel();
-        m_EngineThread.Join(5000); // Wait up to 5 seconds for graceful exit (Vulkan/TaskGraph teardown)
-        
-        m_CancellationTokenSource.Dispose();
-        m_CancellationTokenSource = null;
-        m_EngineThread = null;
+        m_ThreadOwner.Stop();
     }
 
-    private void EngineLoop()
+    private void EngineLoop(CancellationToken token)
     {
         EditorLog.Log("Engine Background Thread Started.");
-        m_Stopwatch.Start();
+        var stopwatch = Stopwatch.StartNew();
+        double lastTime = stopwatch.Elapsed.TotalSeconds;
+        Exception? failure = null;
 
-        double lastTime = m_Stopwatch.Elapsed.TotalSeconds;
-
-        var token = m_CancellationTokenSource.Token;
-
-        // The Hot Loop - ZERO Allocations allowed here
-        while (!token.IsCancellationRequested)
+        try
         {
-            using (Profiler.Zone("EditorEngine_Frame"))
+            // The Hot Loop - ZERO Allocations allowed here
+            while (!token.IsCancellationRequested)
             {
-                double currentTime = m_Stopwatch.Elapsed.TotalSeconds;
-                float deltaTime = (float)(currentTime - lastTime);
-                lastTime = currentTime;
-
-                // 1. Tick the Engine (ECS, Renderer, Physics)
-                EngineKernel.Instance?.Tick(deltaTime);
-
-                // 2. Cap Frame Rate to prevent Editor from burning 100% CPU when idle
-                // In a true shipped game this might be vsync bound, but in Editor we throttle.
-                float elapsedThisFrame = (float)(m_Stopwatch.Elapsed.TotalSeconds - currentTime);
-                if (elapsedThisFrame < m_TargetFrameTime)
+                using (Profiler.Zone("EditorEngine_Frame"))
                 {
-                    int sleepMs = (int)((m_TargetFrameTime - elapsedThisFrame) * 1000.0f);
-                    if (sleepMs > 0)
+                    double currentTime = stopwatch.Elapsed.TotalSeconds;
+                    float deltaTime = (float)(currentTime - lastTime);
+                    lastTime = currentTime;
+
+                    EngineKernel.Instance.Tick(deltaTime);
+
+                    // Editor frame pacing is a performance policy; it does not participate in
+                    // shutdown correctness, which waits on explicit thread completion.
+                    float elapsedThisFrame = (float)(stopwatch.Elapsed.TotalSeconds - currentTime);
+                    if (elapsedThisFrame < TargetFrameTime)
                     {
-                        using (Profiler.Zone("Editor_IdleSleep"))
+                        int sleepMs = (int)((TargetFrameTime - elapsedThisFrame) * 1000.0f);
+                        if (sleepMs > 0)
                         {
-                            Thread.Sleep(sleepMs);
+                            using (Profiler.Zone("Editor_IdleSleep"))
+                            {
+                                Thread.Sleep(sleepMs);
+                            }
                         }
                     }
                 }
             }
         }
-
-        // CRITICAL: Trigger engine kernel shutdown once the loop exits.
-        // This ensures all subsystems (RHI, TaskGraph, ECS) perform their cleanup.
-        if (EngineKernel.IsCreated)
+        catch (Exception error)
         {
-            EditorLog.Log("[EditorEngineRunner] Shutting down Engine Kernel...");
-            EngineKernel.Instance.Shutdown();
+            failure = new InvalidOperationException(
+                "Editor engine frame loop failed.",
+                error);
         }
 
-        m_Stopwatch.Stop();
+        try
+        {
+            if (EngineKernel.IsCreated)
+            {
+                EditorLog.Log("[EditorEngineRunner] Shutting down Engine Kernel...");
+                EngineKernel.Instance.Shutdown();
+            }
+        }
+        catch (Exception error)
+        {
+            var shutdownFailure = new InvalidOperationException(
+                "Editor engine kernel shutdown failed.",
+                error);
+            failure = failure == null
+                ? shutdownFailure
+                : new AggregateException(
+                    "Editor engine frame loop and kernel shutdown both failed.",
+                    failure,
+                    shutdownFailure);
+        }
+
+        stopwatch.Stop();
         EditorLog.Log("Engine Background Thread Stopped.");
+        if (failure != null)
+        {
+            EditorLog.Critical("[EditorEngineRunner] Engine thread failed.", failure);
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
     }
 
     public void Dispose()

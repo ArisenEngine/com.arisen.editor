@@ -35,6 +35,8 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
     private string m_RenderDocCaptureStatus = string.Empty;
     private bool m_RenderDocActionInProgress;
     private readonly IGraphicsDeviceLifecycleService? m_GraphicsDeviceLifecycle;
+    private readonly RenderDocService m_RenderDoc = RenderDocService.Instance;
+    private RenderSurfaceRegistration m_RenderSurfaceRegistration;
     private IImage? _viewportImage;
 
     /// <summary>
@@ -123,13 +125,16 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
             return;
         }
 
-        var renderDoc = RenderDocService.Instance;
-        if (renderDoc.IsAvailable)
+        if (!m_RenderSurfaceRegistration.IsValid)
         {
-            if (!renderDoc.TryTriggerCapture())
-            {
-                RefreshRenderDocCaptureState();
-            }
+            RefreshRenderDocCaptureState();
+            return;
+        }
+
+        if (m_RenderDoc.IsAvailable)
+        {
+            m_RenderDoc.TryTriggerCapture(m_RenderSurfaceRegistration);
+            RefreshRenderDocCaptureState();
             return;
         }
 
@@ -175,6 +180,7 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
         {
             m_GraphicsDeviceLifecycle.StateChanged += OnGraphicsDeviceLifecycleStateChanged;
         }
+        m_RenderDoc.CaptureStateChanged += OnRenderDocCaptureStateChanged;
         RefreshRenderDocCaptureState();
         m_SelectionService = isSceneView ? selectionService : null;
         if (m_SelectionService != null)
@@ -189,8 +195,8 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
 
     private void RefreshRenderDocCaptureState()
     {
-        var renderDoc = RenderDocService.Instance;
-        bool renderDocAvailable = renderDoc.IsAvailable;
+        bool renderDocAvailable = m_RenderDoc.IsAvailable;
+        RenderDocCaptureRequestSnapshot capture = m_RenderDoc.CaptureRequest;
         GraphicsDeviceLifecycleSnapshot? lifecycle = m_GraphicsDeviceLifecycle?.Snapshot;
         bool lifecycleRunning = lifecycle == null ||
             lifecycle.Value.State == GraphicsDeviceLifecycleState.Running;
@@ -199,6 +205,8 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
         IsRenderDocCaptureAvailable =
             !m_RenderDocActionInProgress &&
             lifecycleRunning &&
+            m_RenderSurfaceRegistration.IsValid &&
+            !capture.IsActive &&
             (renderDocAvailable || m_GraphicsDeviceLifecycle != null);
 
         if (lifecycle.HasValue &&
@@ -209,6 +217,23 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
                 ? $"Graphics restart failed: {snapshot.Diagnostic}"
                 : $"Graphics device: {snapshot.State}.";
         }
+        else if (!m_RenderSurfaceRegistration.IsValid)
+        {
+            RenderDocCaptureStatus = "Viewport render surface is not ready.";
+        }
+        else if (capture.IsActive)
+        {
+            RenderDocCaptureStatus = capture.Target == m_RenderSurfaceRegistration
+                ? $"Capture request #{capture.RequestId} is {capture.Status.ToString().ToLowerInvariant()} for this viewport."
+                : $"Capture request #{capture.RequestId} is active for another viewport.";
+        }
+        else if (capture.IsTerminal &&
+                 capture.Target == m_RenderSurfaceRegistration)
+        {
+            RenderDocCaptureStatus = capture.Status == RenderDocCaptureRequestStatus.Succeeded
+                ? $"Capture request #{capture.RequestId} completed."
+                : $"Capture request #{capture.RequestId} failed at {capture.FailureStage}: {capture.Diagnostic}";
+        }
         else if (!renderDocAvailable && m_GraphicsDeviceLifecycle != null)
         {
             RenderDocCaptureStatus =
@@ -216,12 +241,23 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
         }
         else
         {
-            RenderDocCaptureStatus = renderDoc.AvailabilityDiagnostic;
+            RenderDocCaptureStatus = m_RenderDoc.AvailabilityDiagnostic;
         }
     }
 
     private void OnGraphicsDeviceLifecycleStateChanged(
         GraphicsDeviceLifecycleSnapshot snapshot)
+    {
+        RefreshRenderDocCaptureStateOnUIThread();
+    }
+
+    private void OnRenderDocCaptureStateChanged(
+        RenderDocCaptureRequestSnapshot snapshot)
+    {
+        RefreshRenderDocCaptureStateOnUIThread();
+    }
+
+    private void RefreshRenderDocCaptureStateOnUIThread()
     {
         if (Dispatcher.UIThread.CheckAccess())
         {
@@ -230,6 +266,17 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
         }
 
         Dispatcher.UIThread.Post(RefreshRenderDocCaptureState, DispatcherPriority.Loaded);
+    }
+
+    public void SetRenderSurfaceRegistration(RenderSurfaceRegistration registration)
+    {
+        if (m_RenderSurfaceRegistration == registration)
+        {
+            return;
+        }
+
+        m_RenderSurfaceRegistration = registration;
+        RefreshRenderDocCaptureState();
     }
 
     public void SetViewportSize(double width, double height)
@@ -253,6 +300,7 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
         {
             m_GraphicsDeviceLifecycle.StateChanged -= OnGraphicsDeviceLifecycleStateChanged;
         }
+        m_RenderDoc.CaptureStateChanged -= OnRenderDocCaptureStateChanged;
         if (m_SelectionService != null)
         {
             m_SelectionService.SelectionChanged -= OnSelectionChanged;

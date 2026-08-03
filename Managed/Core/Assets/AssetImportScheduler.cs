@@ -19,6 +19,20 @@ internal readonly record struct AssetImportRequest(
     string FullPath,
     string OldFullPath = "");
 
+internal enum AssetImportSchedulerState
+{
+    Accepting,
+    StopRequested,
+    Completed,
+    Disposed
+}
+
+internal sealed record AssetImportFailure(
+    AssetImportRequest Request,
+    int Attempts,
+    string Diagnostic,
+    Exception? Exception);
+
 internal sealed class AssetImportScheduler : IDisposable
 {
     private sealed class PendingImport
@@ -29,6 +43,7 @@ internal sealed class AssetImportScheduler : IDisposable
 
     private readonly object m_Lock = new();
     private readonly Dictionary<string, PendingImport> m_Pending = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<AssetImportFailure> m_TerminalFailures = new();
     private readonly Func<AssetImportRequest, bool> m_Process;
     private readonly TimeSpan m_DebounceDelay;
     private readonly TimeSpan m_RetryDelay;
@@ -36,6 +51,9 @@ internal sealed class AssetImportScheduler : IDisposable
     private readonly CancellationTokenSource m_Cancellation = new();
     private readonly SemaphoreSlim m_Signal = new(0);
     private readonly Task m_Worker;
+    private TaskCompletionSource<bool> m_IdleCompletion = CreateCompletedSignal();
+    private AssetImportSchedulerState m_State = AssetImportSchedulerState.Accepting;
+    private bool m_IsProcessing;
 
     public AssetImportScheduler(
         Func<AssetImportRequest, bool> process,
@@ -46,22 +64,55 @@ internal sealed class AssetImportScheduler : IDisposable
         m_Process = process ?? throw new ArgumentNullException(nameof(process));
         m_DebounceDelay = debounceDelay ?? TimeSpan.FromMilliseconds(150);
         m_RetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(100);
-        m_MaxAttempts = Math.Max(1, maxAttempts);
+        m_MaxAttempts = System.Math.Max(1, maxAttempts);
         m_Worker = Task.Run(ProcessLoopAsync);
     }
 
-    public void Enqueue(AssetImportRequest request)
+    internal event Action<AssetImportFailure>? ImportFailed;
+
+    internal Action? BeforeWorkerCompletion { get; set; }
+
+    internal AssetImportSchedulerState State
+    {
+        get
+        {
+            lock (m_Lock)
+            {
+                return m_State;
+            }
+        }
+    }
+
+    internal Task Completion => m_Worker;
+
+    internal IReadOnlyList<AssetImportFailure> TerminalFailures
+    {
+        get
+        {
+            lock (m_Lock)
+            {
+                return m_TerminalFailures.ToArray();
+            }
+        }
+    }
+
+    public bool Enqueue(AssetImportRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.FullPath))
         {
-            return;
+            return false;
         }
 
-        var normalizedRequest = Normalize(request);
-        var key = CreateKey(normalizedRequest);
+        AssetImportRequest normalizedRequest = Normalize(request);
+        string key = CreateKey(normalizedRequest);
         lock (m_Lock)
         {
-            if (m_Pending.TryGetValue(key, out var pending))
+            if (m_State != AssetImportSchedulerState.Accepting)
+            {
+                return false;
+            }
+
+            if (m_Pending.TryGetValue(key, out PendingImport? pending))
             {
                 pending.Request = Coalesce(pending.Request, normalizedRequest);
                 pending.DueTimeUtc = DateTime.UtcNow + m_DebounceDelay;
@@ -74,27 +125,65 @@ internal sealed class AssetImportScheduler : IDisposable
                     DueTimeUtc = DateTime.UtcNow + m_DebounceDelay
                 };
             }
-        }
 
-        Signal();
+            if (m_IdleCompletion.Task.IsCompleted)
+            {
+                m_IdleCompletion = CreateSignal();
+            }
+
+            m_Signal.Release();
+            return true;
+        }
+    }
+
+    internal Task WaitForIdleAsync()
+    {
+        lock (m_Lock)
+        {
+            return m_IdleCompletion.Task;
+        }
+    }
+
+    internal void RequestStop()
+    {
+        lock (m_Lock)
+        {
+            if (m_State != AssetImportSchedulerState.Accepting)
+            {
+                return;
+            }
+
+            m_State = AssetImportSchedulerState.StopRequested;
+            m_Pending.Clear();
+            m_Cancellation.Cancel();
+            m_Signal.Release();
+        }
     }
 
     private async Task ProcessLoopAsync()
     {
-        var token = m_Cancellation.Token;
-        while (!token.IsCancellationRequested)
+        CancellationToken token = m_Cancellation.Token;
+        try
         {
-            try
+            while (true)
             {
-                var delay = GetDelayUntilNextDue();
+                token.ThrowIfCancellationRequested();
+                TimeSpan delay = GetDelayUntilNextDue();
                 if (delay > TimeSpan.Zero)
                 {
-                    await Task.WhenAny(m_Signal.WaitAsync(token), Task.Delay(delay, token));
+                    await m_Signal.WaitAsync(delay, token);
                 }
 
-                while (TryDequeueDue(out var request))
+                while (TryDequeueDue(out AssetImportRequest request))
                 {
-                    await ProcessWithRetryAsync(request, token);
+                    try
+                    {
+                        await ProcessWithRetryAsync(request, token);
+                    }
+                    finally
+                    {
+                        CompleteActiveRequest();
+                    }
                 }
 
                 if (GetPendingCount() == 0)
@@ -102,38 +191,107 @@ internal sealed class AssetImportScheduler : IDisposable
                     await m_Signal.WaitAsync(token);
                 }
             }
-            catch (OperationCanceledException)
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            try
             {
-                break;
+                BeforeWorkerCompletion?.Invoke();
+            }
+            finally
+            {
+                lock (m_Lock)
+                {
+                    m_Pending.Clear();
+                    m_IsProcessing = false;
+                    m_IdleCompletion.TrySetResult(true);
+                    if (m_State != AssetImportSchedulerState.Disposed)
+                    {
+                        m_State = AssetImportSchedulerState.Completed;
+                    }
+                }
             }
         }
     }
 
     private async Task ProcessWithRetryAsync(AssetImportRequest request, CancellationToken token)
     {
-        for (var attempt = 1; attempt <= m_MaxAttempts && !token.IsCancellationRequested; attempt++)
+        Exception? lastError = null;
+        for (int attempt = 1; attempt <= m_MaxAttempts; attempt++)
         {
-            if (m_Process(request))
+            token.ThrowIfCancellationRequested();
+            try
             {
+                if (m_Process(request))
+                {
+                    return;
+                }
+
+                lastError = null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lastError = ex;
+            }
+            catch (Exception ex)
+            {
+                RecordTerminalFailure(request, attempt, ex.Message, ex);
                 return;
             }
 
             if (attempt < m_MaxAttempts)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(m_RetryDelay.TotalMilliseconds * attempt), token);
+                await Task.Delay(m_RetryDelay * attempt, token);
             }
         }
 
-        ArisenEngine.Core.Diagnostics.Logger.Log(
-            $"[AssetImportScheduler] Import failed after {m_MaxAttempts} attempts: {request.Kind} {request.FullPath}");
+        string diagnostic = lastError?.Message ??
+            $"Processor reported a retryable failure for {m_MaxAttempts} attempt(s).";
+        RecordTerminalFailure(request, m_MaxAttempts, diagnostic, lastError);
+    }
+
+    private void RecordTerminalFailure(
+        AssetImportRequest request,
+        int attempts,
+        string diagnostic,
+        Exception? exception)
+    {
+        var failure = new AssetImportFailure(request, attempts, diagnostic, exception);
+        Action<AssetImportFailure>? handlers;
+        lock (m_Lock)
+        {
+            m_TerminalFailures.Add(failure);
+            handlers = ImportFailed;
+        }
+
+        ArisenEngine.Core.Diagnostics.Logger.Error(
+            $"[AssetImportScheduler] Terminal import failure after {attempts} attempt(s): " +
+            $"{request.Kind} {request.FullPath} | {diagnostic}");
+        if (handlers == null)
+        {
+            return;
+        }
+
+        try
+        {
+            handlers(failure);
+        }
+        catch (Exception callbackError)
+        {
+            ArisenEngine.Core.Diagnostics.Logger.Error(
+                $"[AssetImportScheduler] Import-failure observer threw: {callbackError}");
+        }
     }
 
     private bool TryDequeueDue(out AssetImportRequest request)
     {
         lock (m_Lock)
         {
-            var now = DateTime.UtcNow;
-            foreach (var (key, pending) in m_Pending)
+            DateTime now = DateTime.UtcNow;
+            foreach ((string key, PendingImport pending) in m_Pending)
             {
                 if (pending.DueTimeUtc > now)
                 {
@@ -142,12 +300,22 @@ internal sealed class AssetImportScheduler : IDisposable
 
                 request = pending.Request;
                 m_Pending.Remove(key);
+                m_IsProcessing = true;
                 return true;
             }
         }
 
         request = default;
         return false;
+    }
+
+    private void CompleteActiveRequest()
+    {
+        lock (m_Lock)
+        {
+            m_IsProcessing = false;
+            CompleteIdleIfReady();
+        }
     }
 
     private TimeSpan GetDelayUntilNextDue()
@@ -159,9 +327,9 @@ internal sealed class AssetImportScheduler : IDisposable
                 return TimeSpan.Zero;
             }
 
-            var now = DateTime.UtcNow;
+            DateTime now = DateTime.UtcNow;
             DateTime? earliest = null;
-            foreach (var pending in m_Pending.Values)
+            foreach (PendingImport pending in m_Pending.Values)
             {
                 if (earliest == null || pending.DueTimeUtc < earliest.Value)
                 {
@@ -169,12 +337,9 @@ internal sealed class AssetImportScheduler : IDisposable
                 }
             }
 
-            if (earliest == null || earliest.Value <= now)
-            {
-                return TimeSpan.Zero;
-            }
-
-            return earliest.Value - now;
+            return earliest == null || earliest.Value <= now
+                ? TimeSpan.Zero
+                : earliest.Value - now;
         }
     }
 
@@ -182,18 +347,16 @@ internal sealed class AssetImportScheduler : IDisposable
     {
         lock (m_Lock)
         {
+            CompleteIdleIfReady();
             return m_Pending.Count;
         }
     }
 
-    private void Signal()
+    private void CompleteIdleIfReady()
     {
-        try
+        if (!m_IsProcessing && m_Pending.Count == 0)
         {
-            m_Signal.Release();
-        }
-        catch (ObjectDisposedException)
-        {
+            m_IdleCompletion.TrySetResult(true);
         }
     }
 
@@ -252,20 +415,79 @@ internal sealed class AssetImportScheduler : IDisposable
             : request.FullPath;
     }
 
+    private static TaskCompletionSource<bool> CreateSignal()
+    {
+        return new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private static TaskCompletionSource<bool> CreateCompletedSignal()
+    {
+        TaskCompletionSource<bool> signal = CreateSignal();
+        signal.SetResult(true);
+        return signal;
+    }
+
     public void Dispose()
     {
-        m_Cancellation.Cancel();
-        Signal();
+        lock (m_Lock)
+        {
+            if (m_State == AssetImportSchedulerState.Disposed)
+            {
+                return;
+            }
+        }
+
+        var errors = new List<Exception>();
+        try
+        {
+            RequestStop();
+        }
+        catch (Exception ex)
+        {
+            errors.Add(ex);
+        }
 
         try
         {
-            m_Worker.Wait(TimeSpan.FromSeconds(1));
+            m_Worker.GetAwaiter().GetResult();
         }
-        catch
+        catch (Exception ex)
         {
+            errors.Add(ex);
         }
 
-        m_Cancellation.Dispose();
-        m_Signal.Dispose();
+        lock (m_Lock)
+        {
+            if (m_State == AssetImportSchedulerState.Disposed)
+            {
+                return;
+            }
+
+            m_State = AssetImportSchedulerState.Disposed;
+            try
+            {
+                m_Cancellation.Dispose();
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+
+            try
+            {
+                m_Signal.Dispose();
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new AggregateException(
+                "[AssetImportScheduler] Shutdown failed after worker completion.",
+                errors);
+        }
     }
 }
