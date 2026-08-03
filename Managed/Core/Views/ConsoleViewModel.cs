@@ -125,9 +125,9 @@ public class ConsoleViewModel : EditorPanelBase, IDisposable
         set => this.RaiseAndSetIfChanged(ref m_ShowEditorLogs, value);
     }
 
-    private MessageItemNode m_SelectedItem;
+    private MessageItemNode? m_SelectedItem;
 
-    internal MessageItemNode SelectedItem
+    internal MessageItemNode? SelectedItem
     {
         get
         {
@@ -136,11 +136,11 @@ public class ConsoleViewModel : EditorPanelBase, IDisposable
         set
         {
             m_SelectedItem = value;
-            StackTrace = m_SelectedItem?.StackTrace;
+            StackTrace = m_SelectedItem?.StackTrace ?? string.Empty;
         }
     }
 
-    private string m_StackTrace;
+    private string m_StackTrace = string.Empty;
 
     public string StackTrace
     {
@@ -167,7 +167,7 @@ public class ConsoleViewModel : EditorPanelBase, IDisposable
         }
     }
     
-    private string m_SearchText;
+    private string m_SearchText = string.Empty;
     public string SearchText
     {
         get

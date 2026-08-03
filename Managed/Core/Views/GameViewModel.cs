@@ -73,7 +73,10 @@ internal class GameViewModel : EditorPanelBase
 
     private void OnResolutionConfigChanged(GameViewResolutionConfig? config)
     {
-        GameViewResolution.s_OnResolutionChanged?.Invoke(config!);
+        if (config != null)
+        {
+            GameViewResolution.NotifyResolutionChanged(config);
+        }
     }
 
     void OnGameViewScaleChanged(float value)

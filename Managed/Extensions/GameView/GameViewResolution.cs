@@ -73,10 +73,10 @@ internal static class GameViewResolution
 {
     private static Dictionary<string, GameViewResolutionConfig> s_ResolutionConfigs = new();
     
-    internal static Action<GameViewResolutionConfig> s_OnResolutionListAdded;
-    internal static Action<GameViewResolutionConfig> s_OnResolutionListRemoved;
-    internal static Action<GameViewResolutionConfig> s_OnResolutionChanged;
-    internal static Action<float> s_OnGameViewScaleChanged;
+    internal static event Action<GameViewResolutionConfig>? s_OnResolutionListAdded;
+    internal static event Action<GameViewResolutionConfig>? s_OnResolutionListRemoved;
+    internal static event Action<GameViewResolutionConfig>? s_OnResolutionChanged;
+    internal static event Action<float>? s_OnGameViewScaleChanged;
     
 
     private static float s_GameViewScale = 1.0f;
@@ -107,6 +107,11 @@ internal static class GameViewResolution
         {
             // TODO: log
         }
+    }
+
+    internal static void NotifyResolutionChanged(GameViewResolutionConfig config)
+    {
+        s_OnResolutionChanged?.Invoke(config);
     }
 
     /// <summary>

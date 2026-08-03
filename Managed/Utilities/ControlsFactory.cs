@@ -239,7 +239,7 @@ public static class ControlsFactory
             {
                 if (node.MethodInfo.IsStatic)
                 {
-                    node.MethodInfo.Invoke(null, node.MethodInfo.GetParameters().Length == 0 ? null : new object[] { null, null });
+                    node.MethodInfo.Invoke(null, node.MethodInfo.GetParameters().Length == 0 ? null : new object?[] { null, null });
                 }
             });
         }

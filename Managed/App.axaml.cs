@@ -79,7 +79,7 @@ namespace ArisenEditor
                 {
                     ClearEditorExtensions();
                     s_ViewportSmokeSession?.Dispose();
-                    s_EngineRunner?.Stop();
+                    StopEditorEngineRunner(args);
                 };
 
                 string[] commandLineArgs = Environment.GetCommandLineArgs();
@@ -220,11 +220,10 @@ namespace ArisenEditor
                     options,
                     panelFactory,
                     s_EditorExtensionHost.Panels);
-                s_EngineRunner = new ArisenEditor.Core.Lifecycle.EditorEngineRunner();
                 s_ViewportSmokeSession.Start(() =>
                 {
                     HardwareWarmupStep.InitializeBackend();
-                    s_EngineRunner.Start();
+                    StartEditorEngineRunner(desktop);
                 });
             }
             catch (Exception ex)
@@ -459,8 +458,72 @@ namespace ArisenEditor
             desktop.MainWindow.Show();
             
             // Start the background Engine loop now that the UI is up
-            s_EngineRunner = new ArisenEditor.Core.Lifecycle.EditorEngineRunner();
-            s_EngineRunner.Start();
+            StartEditorEngineRunner(desktop);
+        }
+
+        private static void StartEditorEngineRunner(
+            IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            if (s_EngineRunner != null)
+            {
+                throw new InvalidOperationException("The Editor engine runner is already owned.");
+            }
+
+            var runner = new ArisenEditor.Core.Lifecycle.EditorEngineRunner();
+            s_EngineRunner = runner;
+            runner.Start();
+            _ = ObserveEditorEngineCompletionAsync(runner, desktop);
+        }
+
+        private static async Task ObserveEditorEngineCompletionAsync(
+            ArisenEditor.Core.Lifecycle.EditorEngineRunner runner,
+            IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            try
+            {
+                await runner.Completion.ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                KernelLog.Error($"[EditorEngineRunner] Engine thread failed: {error}");
+                Environment.ExitCode = 1;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!ReferenceEquals(s_EngineRunner, runner))
+                    {
+                        return;
+                    }
+
+                    s_ViewportSmokeSession?.ReportFailure(error.ToString());
+                    desktop.Shutdown(1);
+                });
+            }
+        }
+
+        private static void StopEditorEngineRunner(
+            ControlledApplicationLifetimeExitEventArgs exitArgs)
+        {
+            ArisenEditor.Core.Lifecycle.EditorEngineRunner? runner = s_EngineRunner;
+            if (runner == null)
+            {
+                return;
+            }
+
+            try
+            {
+                runner.Stop();
+            }
+            catch (Exception error)
+            {
+                KernelLog.Error(
+                    $"[EditorEngineRunner] Editor exit observed engine-thread failure: {error}");
+                Environment.ExitCode = 1;
+                exitArgs.ApplicationExitCode = 1;
+            }
+            finally
+            {
+                s_EngineRunner = null;
+            }
         }
         
         private static bool IsProduction()

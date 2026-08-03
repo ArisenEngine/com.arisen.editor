@@ -29,7 +29,8 @@ internal readonly record struct EditorViewportSmokeOptions(
     string Profile,
     string OutputPath,
     int TimeoutSeconds,
-    bool RestartRenderDoc)
+    bool RestartRenderDoc,
+    bool CaptureRenderDoc)
 {
     private const int DefaultTimeoutSeconds = 90;
     private const int MinimumTimeoutSeconds = 5;
@@ -53,6 +54,7 @@ internal readonly record struct EditorViewportSmokeOptions(
         var profile = "Editor";
         var timeoutSeconds = DefaultTimeoutSeconds;
         var restartRenderDoc = false;
+        var captureRenderDoc = false;
         for (var index = 0; index < args.Length; index++)
         {
             if (string.Equals(args[index], "--profile", StringComparison.OrdinalIgnoreCase) &&
@@ -83,6 +85,20 @@ internal readonly record struct EditorViewportSmokeOptions(
             {
                 restartRenderDoc = true;
             }
+            else if (string.Equals(
+                         args[index],
+                         "--editor-viewport-smoke-capture-renderdoc",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                captureRenderDoc = true;
+            }
+        }
+
+        if (captureRenderDoc && !restartRenderDoc)
+        {
+            throw new ArgumentException(
+                "Editor viewport RenderDoc capture requires --editor-viewport-smoke-restart-renderdoc.",
+                nameof(args));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(profile);
@@ -101,7 +117,8 @@ internal readonly record struct EditorViewportSmokeOptions(
             profile,
             outputPath,
             timeoutSeconds,
-            restartRenderDoc);
+            restartRenderDoc,
+            captureRenderDoc);
     }
 }
 
@@ -158,7 +175,8 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             string.Equals(renderDocOptIn, "1", StringComparison.Ordinal) ||
             string.Equals(renderDocOptIn, "true", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(renderDocOptIn, "yes", StringComparison.OrdinalIgnoreCase),
-            options.RestartRenderDoc);
+            options.RestartRenderDoc,
+            options.CaptureRenderDoc);
         ArgumentNullException.ThrowIfNull(panelFactory);
         ArgumentNullException.ThrowIfNull(extensionPanels);
 
@@ -235,9 +253,10 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         _ = WatchTimeoutAsync(m_TimeoutCancellation.Token);
 
         KernelLog.InfoFormat(
-            "[EditorViewportSmoke] Started. Timeout={0}s, RestartRenderDoc={1}, Output={2}",
+            "[EditorViewportSmoke] Started. Timeout={0}s, RestartRenderDoc={1}, CaptureRenderDoc={2}, Output={3}",
             m_Options.TimeoutSeconds,
             m_Options.RestartRenderDoc,
+            m_Options.CaptureRenderDoc,
             m_Options.OutputPath);
     }
 
@@ -396,6 +415,16 @@ internal sealed class EditorViewportSmokeSession : IDisposable
                 ReplaceGameViewportForOwnershipValidation,
                 DispatcherPriority.Send);
 
+            if (m_Options.CaptureRenderDoc)
+            {
+                await CaptureRenderDocFrameAsync();
+                if (m_State.IsComplete && !m_State.Succeeded)
+                {
+                    Complete(m_State.FailureMessage);
+                    return;
+                }
+            }
+
             KernelLog.InfoFormat(
                 "[EditorViewportSmoke] RenderDoc graphics restart completed. PreviousGeneration={0}, CurrentGeneration={1}, RenderDocAvailable={2}. Resuming dual-viewport presentation.",
                 result.PreviousGeneration,
@@ -413,6 +442,75 @@ internal sealed class EditorViewportSmokeSession : IDisposable
         finally
         {
             Interlocked.Exchange(ref m_GraphicsRestartActive, 0);
+        }
+    }
+
+    private async Task CaptureRenderDocFrameAsync()
+    {
+        RenderSurfaceRegistration registration = await Dispatcher.UIThread.InvokeAsync(
+            () => m_SceneView.CurrentRenderSurfaceRegistration,
+            DispatcherPriority.Send);
+        if (!registration.IsValid)
+        {
+            throw new InvalidOperationException(
+                "The restored SceneView has no valid render-surface registration for RenderDoc capture.");
+        }
+
+        RenderDocService renderDoc = RenderDocService.Instance;
+        var completion = new TaskCompletionSource<RenderDocCaptureRequestSnapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        ulong requestId = 0;
+        void OnCaptureStateChanged(RenderDocCaptureRequestSnapshot snapshot)
+        {
+            if (snapshot.Target == registration &&
+                snapshot.IsTerminal &&
+                (requestId == 0 || snapshot.RequestId == requestId))
+            {
+                completion.TrySetResult(snapshot);
+            }
+        }
+
+        renderDoc.CaptureStateChanged += OnCaptureStateChanged;
+        try
+        {
+            if (!renderDoc.TryTriggerCapture(registration))
+            {
+                RenderDocCaptureRequestSnapshot rejected = renderDoc.CaptureRequest;
+                throw new InvalidOperationException(
+                    $"RenderDoc rejected the SceneView capture request: {rejected.Status} {rejected.Diagnostic}");
+            }
+
+            requestId = renderDoc.CaptureRequest.RequestId;
+            m_State.NotifyRenderDocCaptureRequested(requestId);
+            if (m_State.IsComplete && !m_State.Succeeded)
+            {
+                return;
+            }
+
+            RenderDocCaptureRequestSnapshot terminal = await completion.Task.WaitAsync(
+                m_TimeoutCancellation.Token);
+            bool succeeded = terminal.Status == RenderDocCaptureRequestStatus.Succeeded;
+            m_State.ObserveRenderDocCaptureCompleted(
+                terminal.RequestId,
+                succeeded,
+                terminal.Diagnostic,
+                terminal.CapturePath);
+            if (!succeeded)
+            {
+                throw new InvalidOperationException(
+                    $"RenderDoc capture {terminal.RequestId} failed at {terminal.FailureStage}: {terminal.Diagnostic}");
+            }
+
+            KernelLog.InfoFormat(
+                "[EditorViewportSmoke] RenderDoc capture {0} completed for SceneView host 0x{1:X}, generation {2}. Artifact='{3}'.",
+                terminal.RequestId,
+                terminal.Target.Host.ToInt64(),
+                terminal.Target.Generation,
+                terminal.CapturePath);
+        }
+        finally
+        {
+            renderDoc.CaptureStateChanged -= OnCaptureStateChanged;
         }
     }
 

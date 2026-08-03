@@ -4,11 +4,17 @@ using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using ArisenKernel.Contracts;
 
 namespace ArisenEditor.Views;
 
 public partial class EditorViewportView : UserControl
 {
+    private ArisenViewportControl? m_ViewportControl;
+
+    internal RenderSurfaceRegistration CurrentRenderSurfaceRegistration =>
+        m_ViewportControl?.CurrentRenderSurfaceRegistration ?? default;
+
     public EditorViewportView()
     {
         InitializeComponent();
@@ -20,7 +26,10 @@ public partial class EditorViewportView : UserControl
         var container = this.FindControl<ContentControl>("ViewportContainer");
         if (container != null)
         {
-            container.Content = new ArisenViewportControl();
+            m_ViewportControl = new ArisenViewportControl();
+            m_ViewportControl.RenderSurfaceRegistrationChanged +=
+                OnRenderSurfaceRegistrationChanged;
+            container.Content = m_ViewportControl;
         }
     }
 
@@ -31,6 +40,7 @@ public partial class EditorViewportView : UserControl
             change.Property == DataContextProperty)
         {
             PushViewportSizeToViewModel();
+            PushRenderSurfaceRegistrationToViewModel();
         }
     }
 
@@ -40,6 +50,8 @@ public partial class EditorViewportView : UserControl
     {
         if (DataContext is EditorViewportViewModel vm)
         {
+            vm.SetRenderSurfaceRegistration(
+                m_ViewportControl?.CurrentRenderSurfaceRegistration ?? default);
             await vm.ExecuteRenderDocActionAsync();
         }
     }
@@ -49,6 +61,24 @@ public partial class EditorViewportView : UserControl
         if (DataContext is EditorViewportViewModel vm)
         {
             vm.SetViewportSize(Bounds.Width, Bounds.Height);
+        }
+    }
+
+    private void OnRenderSurfaceRegistrationChanged(
+        RenderSurfaceRegistration registration)
+    {
+        if (DataContext is EditorViewportViewModel vm)
+        {
+            vm.SetRenderSurfaceRegistration(registration);
+        }
+    }
+
+    private void PushRenderSurfaceRegistrationToViewModel()
+    {
+        if (DataContext is EditorViewportViewModel vm)
+        {
+            vm.SetRenderSurfaceRegistration(
+                m_ViewportControl?.CurrentRenderSurfaceRegistration ?? default);
         }
     }
 }

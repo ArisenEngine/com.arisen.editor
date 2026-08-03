@@ -12,7 +12,11 @@ namespace ArisenEditor.Core.Assets;
 public class AssetDatabase : IDisposable
 {
     private readonly SqliteConnection _connection;
+    private readonly object _connectionGate = new();
+    private bool _disposed;
     public static AssetDatabase Instance { get; private set; } = null!;
+
+    internal Action? AfterConnectionGateEntered { get; set; }
 
     public static void Initialize(string dbPath)
     {
@@ -27,7 +31,12 @@ public class AssetDatabase : IDisposable
             Directory.CreateDirectory(dbDir);
         }
 
-        _connection = new SqliteConnection($"Data Source={dbPath}");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Pooling = false
+        };
+        _connection = new SqliteConnection(connectionString.ToString());
         _connection.Open();
 
         InitializeSchema();
@@ -67,26 +76,57 @@ public class AssetDatabase : IDisposable
         string packageId,
         long lastModifiedTimeUtc)
     {
-        if (guid == Guid.Empty)
+        lock (_connectionGate)
         {
-            throw new ArgumentException("Asset GUID cannot be empty.", nameof(guid));
-        }
+            EnsureNotDisposed();
+            AfterConnectionGateEntered?.Invoke();
+            if (guid == Guid.Empty)
+            {
+                throw new ArgumentException("Asset GUID cannot be empty.", nameof(guid));
+            }
 
-        var existingPath = GetPath(guid);
-        if (!string.IsNullOrWhiteSpace(existingPath) &&
-            !string.Equals(existingPath, path, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                $"Duplicate asset GUID '{guid}' found at '{path}' and '{existingPath}'.");
-        }
+            using var transaction = _connection.BeginTransaction();
+            string? existingPath;
+            using (var findByGuid = _connection.CreateCommand())
+            {
+                findByGuid.Transaction = transaction;
+                findByGuid.CommandText = "SELECT Path FROM Assets WHERE Guid = $guid LIMIT 1";
+                findByGuid.Parameters.AddWithValue("$guid", guid.ToString());
+                existingPath = findByGuid.ExecuteScalar()?.ToString();
+            }
 
-        if (TryGetGuid(path, out var existingGuid) && existingGuid != guid)
-        {
-            RemoveAsset(existingGuid);
-        }
+            if (!string.IsNullOrWhiteSpace(existingPath) &&
+                !string.Equals(existingPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Duplicate asset GUID '{guid}' found at '{path}' and '{existingPath}'.");
+            }
 
-        using var command = _connection.CreateCommand();
-        command.CommandText = @"
+            Guid existingGuid = Guid.Empty;
+            using (var findByPath = _connection.CreateCommand())
+            {
+                findByPath.Transaction = transaction;
+                findByPath.CommandText = "SELECT Guid FROM Assets WHERE Path = $path LIMIT 1";
+                findByPath.Parameters.AddWithValue("$path", path);
+                object? result = findByPath.ExecuteScalar();
+                if (result != null)
+                {
+                    Guid.TryParse(result.ToString(), out existingGuid);
+                }
+            }
+
+            if (existingGuid != Guid.Empty && existingGuid != guid)
+            {
+                using var removeCollision = _connection.CreateCommand();
+                removeCollision.Transaction = transaction;
+                removeCollision.CommandText = "DELETE FROM Assets WHERE Guid = $guid";
+                removeCollision.Parameters.AddWithValue("$guid", existingGuid.ToString());
+                removeCollision.ExecuteNonQuery();
+            }
+
+            using var command = _connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"
             INSERT INTO Assets (Guid, Path, Type, Importer, PackageId, LastModified)
             VALUES ($guid, $path, $type, $importer, $packageId, $lastModified)
             ON CONFLICT(Guid) DO UPDATE SET
@@ -96,145 +136,264 @@ public class AssetDatabase : IDisposable
                 PackageId=excluded.PackageId,
                 LastModified=excluded.LastModified;
         ";
-        command.Parameters.AddWithValue("$guid", guid.ToString());
-        command.Parameters.AddWithValue("$path", path);
-        command.Parameters.AddWithValue("$type", type);
-        command.Parameters.AddWithValue("$importer", importer);
-        command.Parameters.AddWithValue("$packageId", packageId);
-        command.Parameters.AddWithValue("$lastModified", lastModifiedTimeUtc);
-        
-        command.ExecuteNonQuery();
+            command.Parameters.AddWithValue("$guid", guid.ToString());
+            command.Parameters.AddWithValue("$path", path);
+            command.Parameters.AddWithValue("$type", type);
+            command.Parameters.AddWithValue("$importer", importer);
+            command.Parameters.AddWithValue("$packageId", packageId);
+            command.Parameters.AddWithValue("$lastModified", lastModifiedTimeUtc);
+            command.ExecuteNonQuery();
+            transaction.Commit();
+        }
     }
 
     public bool TryGetGuid(string path, out Guid guid)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT Guid FROM Assets WHERE Path = $path LIMIT 1";
-        command.Parameters.AddWithValue("$path", path);
-
-        var result = command.ExecuteScalar();
-        if (result != null && Guid.TryParse(result.ToString(), out var g))
+        lock (_connectionGate)
         {
-            guid = g;
-            return true;
-        }
+            EnsureNotDisposed();
+            AfterConnectionGateEntered?.Invoke();
+            using var command = _connection.CreateCommand();
+            command.CommandText = "SELECT Guid FROM Assets WHERE Path = $path LIMIT 1";
+            command.Parameters.AddWithValue("$path", path);
 
-        guid = Guid.Empty;
-        return false;
+            var result = command.ExecuteScalar();
+            if (result != null && Guid.TryParse(result.ToString(), out var g))
+            {
+                guid = g;
+                return true;
+            }
+
+            guid = Guid.Empty;
+            return false;
+        }
     }
 
     public string? GetPath(Guid guid)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT Path FROM Assets WHERE Guid = $guid LIMIT 1";
-        command.Parameters.AddWithValue("$guid", guid.ToString());
+        lock (_connectionGate)
+        {
+            EnsureNotDisposed();
+            AfterConnectionGateEntered?.Invoke();
+            using var command = _connection.CreateCommand();
+            command.CommandText = "SELECT Path FROM Assets WHERE Guid = $guid LIMIT 1";
+            command.Parameters.AddWithValue("$guid", guid.ToString());
 
-        var result = command.ExecuteScalar();
-        return result?.ToString();
+            var result = command.ExecuteScalar();
+            return result?.ToString();
+        }
     }
     
     public void RemoveAsset(Guid guid)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = "DELETE FROM Assets WHERE Guid = $guid";
-        command.Parameters.AddWithValue("$guid", guid.ToString());
-        command.ExecuteNonQuery();
+        lock (_connectionGate)
+        {
+            EnsureNotDisposed();
+            using var command = _connection.CreateCommand();
+            command.CommandText = "DELETE FROM Assets WHERE Guid = $guid";
+            command.Parameters.AddWithValue("$guid", guid.ToString());
+            command.ExecuteNonQuery();
+        }
     }
     
     public void RemoveAssetByPath(string path)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = "DELETE FROM Assets WHERE Path = $path";
-        command.Parameters.AddWithValue("$path", path);
-        command.ExecuteNonQuery();
+        lock (_connectionGate)
+        {
+            EnsureNotDisposed();
+            using var command = _connection.CreateCommand();
+            command.CommandText = "DELETE FROM Assets WHERE Path = $path";
+            command.Parameters.AddWithValue("$path", path);
+            command.ExecuteNonQuery();
+        }
+    }
+
+    public void MoveAssetRegistration(
+        Guid guid,
+        string oldPath,
+        string newPath,
+        string type,
+        string importer,
+        string packageId,
+        long lastModifiedTimeUtc)
+    {
+        lock (_connectionGate)
+        {
+            EnsureNotDisposed();
+            if (guid == Guid.Empty)
+            {
+                throw new ArgumentException("Asset GUID cannot be empty.", nameof(guid));
+            }
+
+            using var transaction = _connection.BeginTransaction();
+            string? registeredPath;
+            using (var findByGuid = _connection.CreateCommand())
+            {
+                findByGuid.Transaction = transaction;
+                findByGuid.CommandText = "SELECT Path FROM Assets WHERE Guid = $guid LIMIT 1";
+                findByGuid.Parameters.AddWithValue("$guid", guid.ToString());
+                registeredPath = findByGuid.ExecuteScalar()?.ToString();
+            }
+
+            if (!string.IsNullOrWhiteSpace(registeredPath) &&
+                !string.Equals(registeredPath, oldPath, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(registeredPath, newPath, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Asset GUID '{guid}' is registered at '{registeredPath}', not rename source '{oldPath}'.");
+            }
+
+            Guid destinationGuid = Guid.Empty;
+            using (var findDestination = _connection.CreateCommand())
+            {
+                findDestination.Transaction = transaction;
+                findDestination.CommandText = "SELECT Guid FROM Assets WHERE Path = $path LIMIT 1";
+                findDestination.Parameters.AddWithValue("$path", newPath);
+                object? result = findDestination.ExecuteScalar();
+                if (result != null)
+                {
+                    Guid.TryParse(result.ToString(), out destinationGuid);
+                }
+            }
+
+            if (destinationGuid != Guid.Empty && destinationGuid != guid)
+            {
+                throw new InvalidOperationException(
+                    $"Rename destination '{newPath}' is already registered to asset '{destinationGuid}'.");
+            }
+
+            using var publish = _connection.CreateCommand();
+            publish.Transaction = transaction;
+            publish.CommandText = string.IsNullOrWhiteSpace(registeredPath)
+                ? @"
+                INSERT INTO Assets (Guid, Path, Type, Importer, PackageId, LastModified)
+                VALUES ($guid, $path, $type, $importer, $packageId, $lastModified);"
+                : @"
+                UPDATE Assets SET
+                    Path = $path,
+                    Type = $type,
+                    Importer = $importer,
+                    PackageId = $packageId,
+                    LastModified = $lastModified
+                WHERE Guid = $guid;";
+            publish.Parameters.AddWithValue("$guid", guid.ToString());
+            publish.Parameters.AddWithValue("$path", newPath);
+            publish.Parameters.AddWithValue("$type", type);
+            publish.Parameters.AddWithValue("$importer", importer);
+            publish.Parameters.AddWithValue("$packageId", packageId);
+            publish.Parameters.AddWithValue("$lastModified", lastModifiedTimeUtc);
+            if (publish.ExecuteNonQuery() != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Rename registration for asset '{guid}' did not publish exactly one row.");
+            }
+
+            transaction.Commit();
+        }
     }
 
     public IEnumerable<(Guid Guid, string Path, string Type)> GetAllAssets()
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT Guid, Path, Type FROM Assets";
-        
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        lock (_connectionGate)
         {
-            if (Guid.TryParse(reader.GetString(0), out var g))
+            EnsureNotDisposed();
+            var assets = new List<(Guid Guid, string Path, string Type)>();
+            using var command = _connection.CreateCommand();
+            command.CommandText = "SELECT Guid, Path, Type FROM Assets";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
             {
-                 yield return (g, reader.GetString(1), reader.IsDBNull(2) ? "" : reader.GetString(2));
+                if (Guid.TryParse(reader.GetString(0), out var g))
+                {
+                    assets.Add((g, reader.GetString(1), reader.IsDBNull(2) ? "" : reader.GetString(2)));
+                }
             }
+
+            return assets;
         }
     }
 
     public IEnumerable<(Guid Guid, string Path, string Type, string Importer, string PackageId)> GetAllAssetRecords()
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT Guid, Path, Type, Importer, PackageId FROM Assets";
-
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        lock (_connectionGate)
         {
-            if (Guid.TryParse(reader.GetString(0), out var g))
+            EnsureNotDisposed();
+            var assets = new List<(Guid Guid, string Path, string Type, string Importer, string PackageId)>();
+            using var command = _connection.CreateCommand();
+            command.CommandText = "SELECT Guid, Path, Type, Importer, PackageId FROM Assets";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
             {
-                yield return (
-                    g,
-                    reader.GetString(1),
-                    reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
-                    reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
-                    reader.IsDBNull(4) ? string.Empty : reader.GetString(4));
+                if (Guid.TryParse(reader.GetString(0), out var g))
+                {
+                    assets.Add((
+                        g,
+                        reader.GetString(1),
+                        reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                        reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                        reader.IsDBNull(4) ? string.Empty : reader.GetString(4)));
+                }
             }
+
+            return assets;
         }
     }
 
     public int PruneMissingAssets(string workspaceRoot)
     {
-        if (string.IsNullOrWhiteSpace(workspaceRoot))
+        lock (_connectionGate)
         {
-            throw new ArgumentException("Workspace root cannot be empty.", nameof(workspaceRoot));
-        }
-
-        var fullWorkspaceRoot = Path.GetFullPath(workspaceRoot);
-        var missingGuids = new List<Guid>();
-        using (var command = _connection.CreateCommand())
-        {
-            command.CommandText = "SELECT Guid, Path FROM Assets";
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
+            EnsureNotDisposed();
+            if (string.IsNullOrWhiteSpace(workspaceRoot))
             {
-                if (!Guid.TryParse(reader.GetString(0), out var guid))
-                {
-                    continue;
-                }
+                throw new ArgumentException("Workspace root cannot be empty.", nameof(workspaceRoot));
+            }
 
-                var registeredPath = reader.GetString(1);
-                var sourcePath = Path.IsPathFullyQualified(registeredPath)
-                    ? registeredPath
-                    : Path.Combine(
-                        fullWorkspaceRoot,
-                        registeredPath.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(Path.GetFullPath(sourcePath)))
+            var fullWorkspaceRoot = Path.GetFullPath(workspaceRoot);
+            var missingGuids = new List<Guid>();
+            using (var command = _connection.CreateCommand())
+            {
+                command.CommandText = "SELECT Guid, Path FROM Assets";
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
                 {
-                    missingGuids.Add(guid);
+                    if (!Guid.TryParse(reader.GetString(0), out var guid))
+                    {
+                        continue;
+                    }
+
+                    var registeredPath = reader.GetString(1);
+                    var sourcePath = Path.IsPathFullyQualified(registeredPath)
+                        ? registeredPath
+                        : Path.Combine(
+                            fullWorkspaceRoot,
+                            registeredPath.Replace('/', Path.DirectorySeparatorChar));
+                    if (!File.Exists(Path.GetFullPath(sourcePath)))
+                    {
+                        missingGuids.Add(guid);
+                    }
                 }
             }
-        }
 
-        if (missingGuids.Count == 0)
-        {
-            return 0;
-        }
+            if (missingGuids.Count == 0)
+            {
+                return 0;
+            }
 
-        using var transaction = _connection.BeginTransaction();
-        using var delete = _connection.CreateCommand();
-        delete.Transaction = transaction;
-        delete.CommandText = "DELETE FROM Assets WHERE Guid = $guid";
-        var guidParameter = delete.Parameters.Add("$guid", SqliteType.Text);
-        foreach (var guid in missingGuids)
-        {
-            guidParameter.Value = guid.ToString();
-            delete.ExecuteNonQuery();
-        }
+            using var transaction = _connection.BeginTransaction();
+            using var delete = _connection.CreateCommand();
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM Assets WHERE Guid = $guid";
+            var guidParameter = delete.Parameters.Add("$guid", SqliteType.Text);
+            foreach (var guid in missingGuids)
+            {
+                guidParameter.Value = guid.ToString();
+                delete.ExecuteNonQuery();
+            }
 
-        transaction.Commit();
-        return missingGuids.Count;
+            transaction.Commit();
+            return missingGuids.Count;
+        }
     }
 
     private void EnsureColumn(string name, string type)
@@ -260,6 +419,20 @@ public class AssetDatabase : IDisposable
 
     public void Dispose()
     {
-        _connection?.Dispose();
+        lock (_connectionGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _connection.Dispose();
+            _disposed = true;
+        }
+    }
+
+    private void EnsureNotDisposed()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
     }
 }

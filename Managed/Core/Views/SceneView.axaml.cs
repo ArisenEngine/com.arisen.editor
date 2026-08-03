@@ -15,6 +15,9 @@ public partial class SceneView : UserControl
         WorldPartitionOverlayToggle.Parent != null &&
         WorldPartitionOverlayPanel.Parent != null;
 
+    internal ArisenKernel.Contracts.RenderSurfaceRegistration CurrentRenderSurfaceRegistration =>
+        m_Viewport?.CurrentRenderSurfaceRegistration ?? default;
+
     public SceneView()
     {
         InitializeComponent();

@@ -13,7 +13,7 @@ namespace ArisenEditor.Views;
 /// </summary>
 public partial class GameView : UserControl
 {
-    private GameViewModel m_GameViewModel { get; set; }
+    private GameViewModel? m_GameViewModel { get; set; }
 
     /// <summary>
     /// 
@@ -30,7 +30,8 @@ public partial class GameView : UserControl
     protected override void OnLoaded(RoutedEventArgs e)
     {
         base.OnLoaded(e);
-        m_GameViewModel = (DataContext as GameViewModel)!;
+        m_GameViewModel = DataContext as GameViewModel
+            ?? throw new InvalidOperationException("GameView requires a GameViewModel data context.");
         LoadViewport();
         m_GameViewModel.OnLoaded();
         ResolutionComboBox.SelectedIndex = 0;
@@ -43,7 +44,8 @@ public partial class GameView : UserControl
     protected override void OnUnloaded(RoutedEventArgs e)
     {
         base.OnUnloaded(e);
-        m_GameViewModel.OnUnloaded();
+        m_GameViewModel?.OnUnloaded();
+        m_GameViewModel = null;
         GameViewContainer.Children.Clear();
     }
     

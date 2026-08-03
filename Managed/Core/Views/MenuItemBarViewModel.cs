@@ -7,7 +7,7 @@ namespace ArisenEditor.Core.Views;
 
 internal class MenuItemBarViewModel : ReactiveObject
 {
-    private System.Collections.ObjectModel.ObservableCollection<MenuItemModel> m_Items;
+    private System.Collections.ObjectModel.ObservableCollection<MenuItemModel> m_Items = new();
     public System.Collections.ObjectModel.ObservableCollection<MenuItemModel> Items
     {
         get => m_Items;
