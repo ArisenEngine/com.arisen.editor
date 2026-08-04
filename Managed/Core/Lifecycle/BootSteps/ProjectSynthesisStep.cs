@@ -20,6 +20,17 @@ public class ProjectSynthesisStep : IBootStep
         var activeScene = sceneService.ActiveScene;
         if (activeScene == null)
         {
+            var project = EngineKernel.Instance.Services
+                .GetService<ProjectSubsystem>()
+                .ActiveProject;
+            if (project?.StartupWorld is { IsValid: true } startupWorld)
+            {
+                ArisenEngine.Core.Diagnostics.Logger.Log(
+                    $"[ProjectSynthesis] Startup world '{startupWorld.Guid:D}' is waiting for " +
+                    "frame-boundary residency before editor documents are reconstructed.");
+                return Task.CompletedTask;
+            }
+
             context.Success = false;
             context.ErrorMessage = "The project startup scene was not activated during engine initialization.";
             return Task.CompletedTask;
