@@ -9,6 +9,8 @@ using Avalonia.Platform;
 using Avalonia.Rendering.Composition;
 using Avalonia.Threading;
 using ArisenEngine.Rendering;
+using ArisenEngine.Core.Assets;
+using ArisenEngine.Resources.Serialization;
 using ArisenKernel.Lifecycle;
 using ArisenKernel.Contracts;
 using ArisenKernel.Diagnostics;
@@ -37,6 +39,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
     private ICompositionGpuInterop? _interop;
     private RenderSubsystem? _renderSubsystem;
     private IGraphicsDeviceLifecycleService? _graphicsDeviceLifecycle;
+    private IRuntimeWorldStreamingService? _worldStreaming;
     private EditorViewportSurfaceLease? _surfaceOwnershipLease;
     private RenderSurfaceRegistration _renderSurfaceRegistration;
     private CancellationTokenSource _initializationCancellation = new();
@@ -44,6 +47,8 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
     private bool _isAttached;
     private bool _isParticipantRegistered;
     private bool _surfaceRegistered;
+    private bool _presentationVisualAttached;
+    private bool _startupWorldPresentationSubscriptionActive;
     private bool _graphicsRestartPrepared;
     private bool _isInitialized;
     private bool _isInitializing;
@@ -61,6 +66,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
     private DateTime _lastPresentationSkipLogTime = DateTime.MinValue;
     private RenderOutputPresentationSkipReason _lastPresentationSkipReason;
     private RenderOutputPresentationState _presentationState;
+    private StartupWorldPresentationBarrierState _startupWorldPresentationBarrier;
     private int _lastRequestedSurfaceWidth;
     private int _lastRequestedSurfaceHeight;
     private int _pendingSurfaceWidth;
@@ -164,6 +170,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             }
             lifecycleVersion = ++_lifecycleVersion;
             _presentationFailed = false;
+            InitializeStartupWorldPresentationBarrier();
 
             // 1. Get Compositor and Interop
             var selfVisual = ElementComposition.GetElementVisual(this);
@@ -293,8 +300,11 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             _visual = _compositor.CreateSurfaceVisual();
             UpdatePresentationVisualGeometry();
             _visual.Surface = _surface;
-            
-            ElementComposition.SetElementChildVisual(this, _visual);
+
+            if (!_startupWorldPresentationBarrier.IsActive)
+            {
+                AttachPresentationVisual();
+            }
 
             // 3. Connect to Arisen RenderSubsystem
             if (_renderSubsystem != null)
@@ -359,6 +369,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             catch (Exception releaseException)
             {
                 _resourceReleaseFailed = true;
+                ResetStartupWorldPresentationBarrier();
                 throw new AggregateException(
                     "Viewport initialization was cancelled and its partial GPU ownership could not be released.",
                     releaseException);
@@ -380,6 +391,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             catch (Exception releaseException)
             {
                 _resourceReleaseFailed = true;
+                ResetStartupWorldPresentationBarrier();
                 throw new AggregateException(
                     "Viewport initialization failed and its partial GPU ownership could not be released.",
                     ex,
@@ -443,6 +455,10 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             _resourceReleaseFailed = true;
             KernelLog.Error(
                 $"[ArisenViewportControl] Failed to release compositor ownership during shutdown: {ex.Message}");
+            // GPU ownership remains intact for an explicit retry, but the logical
+            // startup barrier must not retain a detached viewport through the
+            // world-streaming event source.
+            ResetStartupWorldPresentationBarrier();
             return;
         }
 
@@ -490,6 +506,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         }
 
         ElementComposition.SetElementChildVisual(this, null);
+        _presentationVisualAttached = false;
         _surface?.Dispose();
 
         if (releaseSurfaceOwnership || _releaseSurfaceOwnershipOnShutdown)
@@ -500,6 +517,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
 
     private void ResetViewportState()
     {
+        ResetStartupWorldPresentationBarrier();
         _surface = null;
         _visual = null;
         _compositor = null;
@@ -526,6 +544,34 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
         _releaseSurfaceOwnershipOnShutdown = false;
         _activePresentationTask = Task.CompletedTask;
         _resizeTask = null;
+    }
+
+    private void ResetStartupWorldPresentationBarrier()
+    {
+        ClearStartupWorldPresentationSubscription();
+        _startupWorldPresentationBarrier.Reset();
+    }
+
+    private void ClearStartupWorldPresentationSubscription()
+    {
+        if (_startupWorldPresentationSubscriptionActive && _worldStreaming != null)
+        {
+            _worldStreaming.WorldPresentationChanged -= OnWorldPresentationChanged;
+        }
+
+        _worldStreaming = null;
+        _startupWorldPresentationSubscriptionActive = false;
+    }
+
+    private void AttachPresentationVisual()
+    {
+        if (_presentationVisualAttached || _visual == null)
+        {
+            return;
+        }
+
+        ElementComposition.SetElementChildVisual(this, _visual);
+        _presentationVisualAttached = true;
     }
 
     public Task PrepareForGraphicsDeviceRestartAsync(
@@ -837,11 +883,39 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             if (_renderSubsystem == null) return;
         }
 
+        if (_startupWorldPresentationBarrier.IsActive &&
+            (!_startupWorldPresentationBarrier.HasActivationBoundary ||
+             !IsStartupWorldActivationCurrent()))
+        {
+            return;
+        }
+
         RenderSurfaceRegistration registration = _renderSurfaceRegistration;
         if (!registration.IsValid ||
             !_renderSubsystem.GetOutputInfo(registration, out var info))
         {
             QueueNextFrame();
+            return;
+        }
+
+        StartupWorldPresentationBarrierDecision startupBarrierDecision =
+            _startupWorldPresentationBarrier.Evaluate(info.Ticket);
+        if (startupBarrierDecision is
+            StartupWorldPresentationBarrierDecision.WaitForActivation or
+            StartupWorldPresentationBarrierDecision.WaitForOutput)
+        {
+            ReleaseConsumedSemaphore(registration, info.SignalSemaphoreHandle);
+            QueueNextFrame();
+            return;
+        }
+
+        if (startupBarrierDecision ==
+            StartupWorldPresentationBarrierDecision.DiscardOutput)
+        {
+            _activePresentationTask = RenderFrameAsync(
+                registration,
+                info,
+                startupBarrierDecision);
             return;
         }
 
@@ -862,8 +936,134 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             return;
         }
 
-        _activePresentationTask = RenderFrameAsync(registration, info);
+        _activePresentationTask = RenderFrameAsync(
+            registration,
+            info,
+            startupBarrierDecision);
     }
+
+    private void InitializeStartupWorldPresentationBarrier()
+    {
+        if (_startupWorldPresentationSubscriptionActive)
+        {
+            return;
+        }
+
+        var services = EngineKernel.Instance.Services;
+        ProjectSubsystem? projectSubsystem = services.GetService<ProjectSubsystem>();
+        if (projectSubsystem?.ActiveProject?.StartupWorld is not { IsValid: true } startupWorld)
+        {
+            return;
+        }
+
+        _worldStreaming = services.GetService<IRuntimeWorldStreamingService>();
+        _worldStreaming.WorldPresentationChanged += OnWorldPresentationChanged;
+        _startupWorldPresentationSubscriptionActive = true;
+        RuntimeWorldPresentationSnapshot presentation =
+            _worldStreaming.PresentationSnapshot;
+        var configuredStartup = new StartupWorldPresentationTarget(
+            startupWorld.Guid,
+            startupWorld.PackageId);
+        StartupWorldPresentationObservation observation =
+            ToPresentationObservation(presentation);
+        if (!_startupWorldPresentationBarrier.TryBegin(
+                configuredStartup,
+                observation))
+        {
+            ResetStartupWorldPresentationBarrier();
+        }
+    }
+
+    private void OnWorldPresentationChanged(RuntimeWorldPresentationSnapshot snapshot)
+    {
+        int lifecycleVersion = _lifecycleVersion;
+        ulong activationOutputTicket = GetCurrentOutputTicket();
+        Dispatcher.UIThread.Post(
+            () => ReconcileStartupWorldPresentationBarrier(
+                lifecycleVersion,
+                snapshot.Revision,
+                activationOutputTicket),
+            DispatcherPriority.Render);
+    }
+
+    private ulong GetCurrentOutputTicket()
+    {
+        RenderSubsystem? renderSubsystem = _renderSubsystem;
+        RenderSurfaceRegistration registration = _renderSurfaceRegistration;
+        return renderSubsystem != null && registration.IsValid
+            ? renderSubsystem.GetLastRenderTicket(registration)
+            : 0;
+    }
+
+    private void ReconcileStartupWorldPresentationBarrier(
+        int lifecycleVersion,
+        long notificationRevision,
+        ulong activationOutputTicket)
+    {
+        if (lifecycleVersion != _lifecycleVersion ||
+            !_isAttached ||
+            !_startupWorldPresentationSubscriptionActive ||
+            !_startupWorldPresentationBarrier.IsActive ||
+            _worldStreaming == null)
+        {
+            return;
+        }
+
+        IRuntimeWorldStreamingService streaming = _worldStreaming;
+        RuntimeWorldPresentationSnapshot presentation = streaming.PresentationSnapshot;
+        StartupWorldPresentationReconcileDecision decision =
+            _startupWorldPresentationBarrier.Reconcile(
+                notificationRevision,
+                ToPresentationObservation(presentation),
+                activationOutputTicket);
+        if (decision ==
+            StartupWorldPresentationReconcileDecision.ActivationBoundaryCaptured)
+        {
+            QueueNextFrame();
+            return;
+        }
+
+        if (decision is
+            StartupWorldPresentationReconcileDecision.None or
+            StartupWorldPresentationReconcileDecision.StaleNotification or
+            StartupWorldPresentationReconcileDecision.WaitForActivation)
+        {
+            return;
+        }
+
+        ResetStartupWorldPresentationBarrier();
+        AttachPresentationVisual();
+        QueueNextFrame();
+    }
+
+    private bool IsStartupWorldActivationCurrent()
+    {
+        IRuntimeWorldStreamingService? streaming = _worldStreaming;
+        if (streaming == null)
+        {
+            return false;
+        }
+
+        RuntimeWorldPresentationSnapshot presentation = streaming.PresentationSnapshot;
+        return _startupWorldPresentationBarrier.IsCurrentActivation(
+            ToPresentationObservation(presentation));
+    }
+
+    private static StartupWorldPresentationObservation ToPresentationObservation(
+        in RuntimeWorldPresentationSnapshot snapshot) => new(
+        snapshot.Revision,
+        ToPresentationTarget(snapshot.ActiveWorldAsset),
+        snapshot.ActiveWorldGuid,
+        ToPresentationTarget(snapshot.PendingWorldAsset));
+
+    private static StartupWorldPresentationTarget? ToPresentationTarget(
+        AssetRef<WorldSourceAsset>? world) =>
+        world is { IsValid: true } value
+            ? ToPresentationTarget(value)
+            : null;
+
+    private static StartupWorldPresentationTarget ToPresentationTarget(
+        AssetRef<WorldSourceAsset> world) => new(world.Guid, world.PackageId);
 
     private void LogPresentationSkipIfUseful(in RenderOutputInfo info, RenderOutputPresentationSkipReason reason)
     {
@@ -891,7 +1091,8 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
 
     private async Task RenderFrameAsync(
         RenderSurfaceRegistration registration,
-        RenderOutputInfo info)
+        RenderOutputInfo info,
+        StartupWorldPresentationBarrierDecision startupBarrierDecision)
     {
         _isUpdating = true;
         
@@ -979,16 +1180,35 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
                 await surface.UpdateAsync(importedImage);
             }
 
-            // Mark the ticket as presented only after Avalonia accepted the image. If import/update fails,
-            // the next composition tick can retry the same valid engine frame instead of skipping it forever.
-            _presentationState.MarkPresented(info);
-
             // Report consumption back to engine for back-pressure
             var consumptionReported = _renderSubsystem?.ReportConsumedFrameIndex(
                 registration,
                 info.FrameIndex) == true;
             var lastConsumedFrameIndex = _renderSubsystem?.GetLastConsumedFrameIndex(
                 registration) ?? 0;
+
+            if (startupBarrierDecision ==
+                StartupWorldPresentationBarrierDecision.DiscardOutput)
+            {
+                return;
+            }
+
+            // Mark the ticket as presented only after Avalonia accepted the image. If import/update fails,
+            // the next composition tick can retry the same valid engine frame instead of skipping it forever.
+            _presentationState.MarkPresented(info);
+
+            if (startupBarrierDecision ==
+                    StartupWorldPresentationBarrierDecision.PresentAndRelease &&
+                _startupWorldPresentationBarrier.IsActive &&
+                _startupWorldPresentationBarrier.Evaluate(info.Ticket) ==
+                    StartupWorldPresentationBarrierDecision.PresentAndRelease &&
+                IsStartupWorldActivationCurrent())
+            {
+                _startupWorldPresentationBarrier.CompleteAfterPresented(info.Ticket);
+                ClearStartupWorldPresentationSubscription();
+                AttachPresentationVisual();
+            }
+
             var visual = _visual;
             if (visual != null)
             {
