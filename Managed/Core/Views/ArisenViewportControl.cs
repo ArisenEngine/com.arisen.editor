@@ -114,6 +114,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
     {
         _isAttached = false;
         CancelInitialization();
+        DetachSceneViewNavigation();
         Shutdown(releaseSurfaceOwnership: true);
         base.OnDetachedFromVisualTree(e);
     }
@@ -248,6 +249,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
             _viewportKind = DataContext is EditorViewportViewModel { IsSceneView: false }
                 ? EditorViewportKind.GameView
                 : EditorViewportKind.SceneView;
+            AttachSceneViewNavigation();
             _renderSubsystem = EngineKernel.Instance.Services.GetService<RenderSubsystem>();
             if (_renderSubsystem != null && _surfaceOwnershipLease == null)
             {
@@ -517,6 +519,7 @@ public partial class ArisenViewportControl : Control, IGraphicsDeviceLifecyclePa
 
     private void ResetViewportState()
     {
+        DetachSceneViewNavigation();
         ResetStartupWorldPresentationBarrier();
         _surface = null;
         _visual = null;

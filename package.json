@@ -40,6 +40,13 @@
     "com.arisen.platform.desktop": "1.0.0",
     "com.arisen.nodecanvas": "1.0.0"
   },
+  "subsystems": [
+    {
+      "class": "ArisenEditor.Core.Services.EditorSceneViewNavigationSubsystem",
+      "phase": "Running",
+      "priority": 70
+    }
+  ],
   "nugetDependencies": {
     "Avalonia": "11.2.4",
     "Avalonia.Desktop": "11.2.4",

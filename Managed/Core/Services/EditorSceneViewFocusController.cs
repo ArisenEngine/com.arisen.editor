@@ -11,7 +11,7 @@ internal sealed class EditorSceneViewFocusController : IDisposable
         new Dictionary<Guid, MeshBounds>();
 
     private readonly IEditorWorldDocumentService m_Documents;
-    private readonly RenderSubsystem m_Rendering;
+    private readonly EditorSceneViewCameraController m_SceneViewCamera;
     private readonly IAssetDatabase m_AssetDatabase;
     private readonly object m_MeshBoundsGate = new();
     private readonly Dictionary<Guid, MeshBounds> m_MeshBoundsByGuid = new();
@@ -21,11 +21,11 @@ internal sealed class EditorSceneViewFocusController : IDisposable
 
     public EditorSceneViewFocusController(
         IEditorWorldDocumentService documents,
-        RenderSubsystem rendering,
+        EditorSceneViewCameraController sceneViewCamera,
         IAssetDatabase assetDatabase)
     {
         m_Documents = documents ?? throw new ArgumentNullException(nameof(documents));
-        m_Rendering = rendering ?? throw new ArgumentNullException(nameof(rendering));
+        m_SceneViewCamera = sceneViewCamera ?? throw new ArgumentNullException(nameof(sceneViewCamera));
         m_AssetDatabase = assetDatabase ?? throw new ArgumentNullException(nameof(assetDatabase));
         m_Documents.FocusRequested += OnFocusRequested;
         m_Documents.StateChanged += OnStateChanged;
@@ -66,7 +66,7 @@ internal sealed class EditorSceneViewFocusController : IDisposable
             return;
         }
 
-        m_Rendering.SetSceneViewCameraOverride(frame.Camera);
+        m_SceneViewCamera.ApplyFocusFrame(frame.Camera);
         m_FocusedWorldGuid = state.Descriptor.WorldGuid;
         m_FocusedCellId = cellId;
     }
@@ -149,7 +149,7 @@ internal sealed class EditorSceneViewFocusController : IDisposable
 
     private void ClearFocus()
     {
-        m_Rendering.ClearSceneViewCameraOverride();
+        m_SceneViewCamera.ClearFocusFrame();
         m_FocusedWorldGuid = Guid.Empty;
         m_FocusedCellId = default;
     }

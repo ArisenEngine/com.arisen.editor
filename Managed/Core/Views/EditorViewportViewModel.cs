@@ -6,6 +6,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using ArisenEditor.Core.Services;
 using ReactiveUI;
+using MathExtensions = ArisenEngine.Core.Math.MathExtensions;
 using ArisenEngine.Rendering;
 using ArisenKernel.Contracts;
 using ArisenKernel.Diagnostics;
@@ -404,7 +405,7 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
 
         var camera = cameraEntity.Camera;
         var cameraTransform = cameraEntity.Transform;
-        var euler = QuaternionToEulerDegrees(cameraTransform.Rotation);
+        var euler = MathExtensions.QuaternionToEulerDegrees(cameraTransform.Rotation);
         var rotation = Matrix4x4.CreateFromYawPitchRoll(
             euler.Y * MathF.PI / 180.0f,
             euler.X * MathF.PI / 180.0f,
@@ -491,29 +492,5 @@ public class EditorViewportViewModel : ReactiveObject, IDisposable
     private static string FormatPosition(Vector3 position)
     {
         return $"Position {position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}";
-    }
-
-    private static Vector3 QuaternionToEulerDegrees(Quaternion q)
-    {
-        var sinRcosP = 2.0f * (q.W * q.Z + q.X * q.Y);
-        var cosRcosP = 1.0f - 2.0f * (q.Y * q.Y + q.Z * q.Z);
-        var roll = MathF.Atan2(sinRcosP, cosRcosP);
-
-        var sinP = 2.0f * (q.W * q.X - q.Z * q.Y);
-        float pitch;
-        if (MathF.Abs(sinP) >= 1.0f)
-        {
-            pitch = MathF.CopySign(MathF.PI / 2.0f, sinP);
-        }
-        else
-        {
-            pitch = MathF.Asin(sinP);
-        }
-
-        var sinYcosP = 2.0f * (q.W * q.Y + q.Z * q.X);
-        var cosYcosP = 1.0f - 2.0f * (q.X * q.X + q.Y * q.Y);
-        var yaw = MathF.Atan2(sinYcosP, cosYcosP);
-        const float radToDeg = 180.0f / MathF.PI;
-        return new Vector3(pitch * radToDeg, yaw * radToDeg, roll * radToDeg);
     }
 }

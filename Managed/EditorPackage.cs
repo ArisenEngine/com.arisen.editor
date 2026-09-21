@@ -21,6 +21,8 @@ public class EditorPackage : IPackageEntry, IApplicationHost
     private IEditorSceneDocumentService? m_SceneDocumentService;
     private IEditorWorldDocumentService? m_WorldDocumentService;
     private EditorSceneViewFocusController? m_SceneViewFocusController;
+    private EditorSceneViewCameraController? m_SceneViewCamera;
+    private EditorSceneViewNavigationInput? m_SceneViewNavigation;
     private EditorExtensionRegistry? m_ExtensionRegistry;
 
     public void OnLoad(IServiceRegistry registry)
@@ -45,9 +47,18 @@ public class EditorPackage : IPackageEntry, IApplicationHost
             m_SceneDocumentService);
         m_WorldDocumentService.OperationFailed += OnWorldDocumentOperationFailed;
         registry.RegisterService<IEditorWorldDocumentService>(m_WorldDocumentService);
+        // The scene-view camera has a single owner in the editor: focus framing and interactive
+        // navigation both publish through it, so the viewport override can never be fought over.
+        m_SceneViewNavigation = new EditorSceneViewNavigationInput();
+        m_SceneViewCamera = new EditorSceneViewCameraController(
+            registry.GetService<RenderSubsystem>(),
+            registry.GetService<IRuntimeWorldStreamingService>(),
+            m_SceneViewNavigation);
+        registry.RegisterService(m_SceneViewNavigation);
+        registry.RegisterService(m_SceneViewCamera);
         m_SceneViewFocusController = new EditorSceneViewFocusController(
             m_WorldDocumentService,
-            registry.GetService<RenderSubsystem>(),
+            m_SceneViewCamera,
             assetDatabase);
         registry.RegisterService<IApplicationHost>(this);
     }
@@ -57,6 +68,10 @@ public class EditorPackage : IPackageEntry, IApplicationHost
     {
         m_SceneViewFocusController?.Dispose();
         m_SceneViewFocusController = null;
+        m_SceneViewCamera?.Dispose();
+        m_SceneViewCamera = null;
+        m_SceneViewNavigation?.SetActive(false);
+        m_SceneViewNavigation = null;
         if (m_WorldDocumentService != null)
         {
             m_WorldDocumentService.OperationFailed -= OnWorldDocumentOperationFailed;
