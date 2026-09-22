@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using ArisenEngine.Resources.Serialization;
 
 namespace ArisenEditor.Core.Validation;
 
@@ -73,7 +74,7 @@ public sealed class EditorViewportSmokeChecks
     public bool PostRestartGameFramesPresented { get; init; }
     public bool TerrainPaintInteractionPassed { get; init; }
     public bool WorldVisibleOnFirstOpen { get; init; }
-    public bool WorldOriginCellSelected { get; init; }
+    public bool WorldCameraCellSelected { get; init; }
     public bool WorldCellLoadObserved { get; init; }
     public bool WorldCellUnloadObserved { get; init; }
 
@@ -98,7 +99,7 @@ public sealed class EditorViewportSmokeChecks
         PostRestartGameFramesPresented &&
         TerrainPaintInteractionPassed &&
         WorldVisibleOnFirstOpen &&
-        WorldOriginCellSelected &&
+        WorldCameraCellSelected &&
         WorldCellLoadObserved &&
         WorldCellUnloadObserved;
 }
@@ -111,6 +112,18 @@ public sealed class EditorWorldPartitionSmokeObservation
     public int CellX { get; init; }
     public int CellY { get; init; }
     public int CellZ { get; init; }
+    public int CameraCellX { get; init; }
+    public int CameraCellY { get; init; }
+    public int CameraCellZ { get; init; }
+    public double CameraPositionX { get; init; }
+    public double CameraPositionY { get; init; }
+    public double CameraPositionZ { get; init; }
+    public double PartitionOriginX { get; init; }
+    public double PartitionOriginY { get; init; }
+    public double PartitionOriginZ { get; init; }
+    public double PartitionCellSizeX { get; init; }
+    public double PartitionCellSizeY { get; init; }
+    public double PartitionCellSizeZ { get; init; }
     public bool LoadRequested { get; init; }
     public bool ActiveObserved { get; init; }
     public bool UnloadRequested { get; init; }
@@ -119,7 +132,7 @@ public sealed class EditorWorldPartitionSmokeObservation
 
 public sealed class EditorViewportSmokeArtifact
 {
-    public int SchemaVersion { get; init; } = 8;
+    public int SchemaVersion { get; init; } = 9;
     public string CapturedAtUtc { get; init; } = DateTimeOffset.UtcNow.ToString("O");
     public required string Profile { get; init; }
     public int TimeoutSeconds { get; init; }
@@ -189,9 +202,12 @@ public sealed class EditorViewportSmokeState
     private Guid m_WorldGuid;
     private int m_WorldCellCount;
     private Guid m_WorldCellId;
-    private int m_WorldCellX;
-    private int m_WorldCellY;
-    private int m_WorldCellZ;
+    private bool m_WorldPartitionObserved;
+    private WorldCellCoordinate m_WorldCellCoordinate;
+    private WorldCellCoordinate m_WorldCameraCell;
+    private WorldPosition m_WorldCameraPosition;
+    private WorldPosition m_WorldPartitionOrigin;
+    private WorldPosition m_WorldPartitionCellSize;
     private bool m_WorldCellLoadRequested;
     private bool m_WorldCellActiveObserved;
     private bool m_WorldCellUnloadRequested;
@@ -678,9 +694,10 @@ public sealed class EditorViewportSmokeState
         Guid worldGuid,
         int cellCount,
         Guid cellId,
-        int cellX,
-        int cellY,
-        int cellZ)
+        WorldCellCoordinate selectedCell,
+        WorldCellCoordinate cameraCell,
+        WorldPosition cameraPosition,
+        WorldPartitionSettings partition)
     {
         if (m_Stage == EditorViewportSmokeStage.Failed)
         {
@@ -691,13 +708,23 @@ public sealed class EditorViewportSmokeState
             Fail("The Editor did not expose a valid active world and world cell on first open.");
             return;
         }
+        if (partition is null || !cameraPosition.IsFinite)
+        {
+            Fail(
+                "The Editor world did not expose a finite scene-view camera pose and partition " +
+                "for its first-open cell.");
+            return;
+        }
 
         m_WorldGuid = worldGuid;
         m_WorldCellCount = cellCount;
         m_WorldCellId = cellId;
-        m_WorldCellX = cellX;
-        m_WorldCellY = cellY;
-        m_WorldCellZ = cellZ;
+        m_WorldPartitionObserved = true;
+        m_WorldCellCoordinate = selectedCell;
+        m_WorldCameraCell = cameraCell;
+        m_WorldCameraPosition = cameraPosition;
+        m_WorldPartitionOrigin = partition.Origin;
+        m_WorldPartitionCellSize = partition.CellSize;
     }
 
     public void NotifyWorldCellLoadRequested(Guid cellId)
@@ -872,10 +899,9 @@ public sealed class EditorViewportSmokeState
                 m_WorldGuid != Guid.Empty &&
                 m_WorldCellCount > 0 &&
                 m_WorldCellId != Guid.Empty,
-            WorldOriginCellSelected =
-                m_WorldCellX == 0 &&
-                m_WorldCellY == 0 &&
-                m_WorldCellZ == 0,
+            WorldCameraCellSelected =
+                m_WorldPartitionObserved &&
+                m_WorldCellCoordinate == m_WorldCameraCell,
             WorldCellLoadObserved = m_WorldCellLoadRequested && m_WorldCellActiveObserved,
             WorldCellUnloadObserved = m_WorldCellUnloadRequested && m_WorldCellUnloadedObserved
         };
@@ -890,9 +916,21 @@ public sealed class EditorViewportSmokeState
                 WorldGuid = m_WorldGuid,
                 CellCount = m_WorldCellCount,
                 CellId = m_WorldCellId,
-                CellX = m_WorldCellX,
-                CellY = m_WorldCellY,
-                CellZ = m_WorldCellZ,
+                CellX = m_WorldCellCoordinate.X,
+                CellY = m_WorldCellCoordinate.Y,
+                CellZ = m_WorldCellCoordinate.Z,
+                CameraCellX = m_WorldCameraCell.X,
+                CameraCellY = m_WorldCameraCell.Y,
+                CameraCellZ = m_WorldCameraCell.Z,
+                CameraPositionX = m_WorldCameraPosition.X,
+                CameraPositionY = m_WorldCameraPosition.Y,
+                CameraPositionZ = m_WorldCameraPosition.Z,
+                PartitionOriginX = m_WorldPartitionOrigin.X,
+                PartitionOriginY = m_WorldPartitionOrigin.Y,
+                PartitionOriginZ = m_WorldPartitionOrigin.Z,
+                PartitionCellSizeX = m_WorldPartitionCellSize.X,
+                PartitionCellSizeY = m_WorldPartitionCellSize.Y,
+                PartitionCellSizeZ = m_WorldPartitionCellSize.Z,
                 LoadRequested = m_WorldCellLoadRequested,
                 ActiveObserved = m_WorldCellActiveObserved,
                 UnloadRequested = m_WorldCellUnloadRequested,

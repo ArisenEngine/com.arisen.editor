@@ -645,14 +645,33 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             return;
         }
 
-        EditorWorldCellDocumentState? originCell = world.Cells.FirstOrDefault(
-            candidate => candidate.Descriptor.Key.Coordinate == new WorldCellCoordinate(0, 0, 0));
-        if (originCell == null)
+        if (!EditorSceneViewCameraSeed.TryReadSceneCamera(out SceneViewCameraOverride sceneCamera))
         {
-            m_State.Fail("The canonical Editor world did not expose cell (0,0,0).");
+            m_State.Fail("The Editor world did not expose the scene-view camera that presents its first frame.");
             return;
         }
-        EditorWorldCellDocumentState cell = originCell;
+
+        WorldCellCoordinate cameraCoordinate = WorldPartitionCoordinates.GetCoordinate(
+            world.Descriptor.Partition,
+            sceneCamera.Position);
+        EditorWorldCellDocumentState? cameraCell = world.Cells.FirstOrDefault(
+            candidate => candidate.Descriptor.Key.Coordinate == cameraCoordinate);
+        if (cameraCell == null)
+        {
+            m_State.Fail(
+                "The Editor world did not expose the cell " +
+                $"({cameraCoordinate.X},{cameraCoordinate.Y},{cameraCoordinate.Z}) the scene-view camera stands in.");
+            return;
+        }
+        EditorWorldCellDocumentState cell = cameraCell;
+        KernelLog.InfoFormat(
+            "[EditorViewportSmoke] Scene-view camera ({0:F4},{1:F4},{2:F4}) occupies world cell ({3},{4},{5}); validating that cell.",
+            sceneCamera.Position.X,
+            sceneCamera.Position.Y,
+            sceneCamera.Position.Z,
+            cameraCoordinate.X,
+            cameraCoordinate.Y,
+            cameraCoordinate.Z);
         m_WorldDocuments = documents;
         m_WorldCellId = cell.CellId;
         m_WorldPartitionViewModel = new WorldPartitionViewModel();
@@ -673,9 +692,10 @@ internal sealed class EditorViewportSmokeSession : IDisposable
             world.World.Guid,
             world.Cells.Count,
             cell.CellId.Value,
-            cell.Descriptor.Key.Coordinate.X,
-            cell.Descriptor.Key.Coordinate.Y,
-            cell.Descriptor.Key.Coordinate.Z);
+            cell.Descriptor.Key.Coordinate,
+            cameraCoordinate,
+            sceneCamera.Position,
+            world.Descriptor.Partition);
         if (m_State.IsComplete && !m_State.Succeeded)
         {
             return;
